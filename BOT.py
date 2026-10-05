@@ -1,6 +1,8 @@
 import math
 import asyncio
+import os
 import sqlite3
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -304,7 +306,6 @@ async def admin_start_delete(message: Message):
         await message.answer("📁 База студентов пуста, некого удалять.")
         return
 
-    # Создаем инлайн-клавиатуру со списком студентов для удаления
     inline_kb = InlineKeyboardMarkup(inline_keyboard=[])
     for t_id, name in rows:
         inline_kb.inline_keyboard.append([
@@ -365,14 +366,32 @@ async def admin_process_radius(message: Message, state: FSMContext):
     await message.answer(f"✅ Новый радиус зоны: <b>{ALLOWED_RADIUS_METERS}м</b>", parse_mode="HTML")
 
 
-# --- Запуск бота ---
+# --- Настройка фиктивного веб-сервера для Render (Web Service) ---
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.add_routes([web.get('/', handle)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+
+# --- Запуск бота и сервера параллельно ---
 async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
     
     await bot.delete_webhook(drop_pending_updates=True)
-    print("Бот успешно запущен и работает...")
+    
+    # Запускаем веб-сервер, чтобы Render видел открытый порт и не давал Timeout
+    await start_web_server()
+    print("Веб-сервер для Render и бот успешно запущены...")
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
