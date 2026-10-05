@@ -8,7 +8,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     Message, CallbackQuery, 
     ReplyKeyboardMarkup, KeyboardButton,
-    InlineKeyboardMarkup, InlineKeyboardButton
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardRemove
 )
 
 TOKEN = "8932791447:AAGB5HfDMv1Jq7yMwVwko9YVl7rubu7F3tM"
@@ -61,7 +62,7 @@ async def cmd_start(message: Message, state: FSMContext):
     if message.from_user.id == ADMIN_ID:
         admin_kb = ReplyKeyboardMarkup(
             keyboard=[
-                [KeyboardButton(text="🟢 Начать проверку"), KeyboardButton(text="🔴 Завершить и проверить")],
+                [KeyboardButton(text="🟢 Начать пару"), KeyboardButton(text="🔴 Завершить и проверить")],
                 [KeyboardButton(text="👥 Список студентов"), KeyboardButton(text="🗑 Удалить студента")],
                 [KeyboardButton(text="⚙️ Изменить радиус зоны")]
             ],
@@ -167,7 +168,7 @@ async def cmd_start_pair(message: Message, bot: Bot):
     await message.answer(f"✅ Пара успешно начата! Уведомления отправлены студентам ({count} чел.).")
 
 
-@router.message(F.text == "🔴 Завершить пару и проверить")
+@router.message(F.text == "🔴 Завершить и проверить")
 @router.message(Command("stop_pair"))
 async def cmd_stop_pair(message: Message, bot: Bot):
     if message.from_user.id != ADMIN_ID:
@@ -261,7 +262,7 @@ async def handle_location(message: Message, bot: Bot):
                 parse_mode="HTML"
             )
 
-        await message.answer("Спасибо! Геопозиция принята.", reply_markup=ReplyKeyboardMarkup(keyboard=[], resize_keyboard=True))
+        await message.answer("Спасибо! Геопозиция принята.", reply_markup=ReplyKeyboardRemove())
 
 
 # --- Дополнительный админский функционал ---
