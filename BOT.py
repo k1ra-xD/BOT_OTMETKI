@@ -17,9 +17,9 @@ from aiogram.types import (
 TOKEN = "8932791447:AAGB5HfDMv1Jq7yMwVwko9YVl7rubu7F3tM"
 ADMIN_ID = 1231388093  # Ваш ID
 
-# Координаты университета (главный корпус)
-UNI_LAT = 51.128200 
-UNI_LON = 71.430400
+# ОБНОВЛЕННЫЕ Координаты (ваша текущая точка из теста)
+UNI_LAT = 51.159555 
+UNI_LON = 71.458555
 ALLOWED_RADIUS_METERS = 150  # радиус зоны в метрах
 
 router = Router()
@@ -243,6 +243,17 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 @router.message(F.location)
 async def handle_location(message: Message, bot: Bot):
     if message.from_user.id in current_session["present_students"]:
+        
+        # НОВОЕ: Проверка погрешности геолокации (accuracy)
+        accuracy = getattr(message.location, 'horizontal_accuracy', None)
+        if accuracy and accuracy > 200:
+            await message.answer(
+                f"⚠️ Ваш телефон определяет координаты с большой погрешностью (~{int(accuracy)}м). "
+                "Это происходит из-за плохих сигналов спутников внутри здания.\n"
+                "Пожалуйста, подойдите ближе к окну, включите Wi-Fi для точности и отправьте геопозицию снова."
+            )
+            return
+
         lat = message.location.latitude
         lon = message.location.longitude
         
@@ -260,7 +271,7 @@ async def handle_location(message: Message, bot: Bot):
             
             await bot.send_message(
                 active_admin_chat_id,
-                f"⚠️ <b>Внимание!</b> Студент <b>{name}</b> находится вне зоны университета ({int(dist)}м от вуза) и числится вне пары!",
+                f"⚠️ <b>Внимание!</b> Студент <b>{name}</b> находится вне зоны ({int(dist)}м от вуза) и числится вне пары!",
                 parse_mode="HTML"
             )
 
@@ -380,7 +391,7 @@ async def start_web_server():
     await site.start()
 
 
-# --- Запуск бота и сервера параллельно ---
+# --- ОБНОВЛЕННЫЙ Запуск бота и сервера параллельно ---
 async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
@@ -388,11 +399,12 @@ async def main():
     
     await bot.delete_webhook(drop_pending_updates=True)
     
-    # Запускаем веб-сервер, чтобы Render видел открытый порт и не давал Timeout
-    await start_web_server()
-    print("Веб-сервер для Render и бот успешно запущены...")
-    
-    await dp.start_polling(bot)
+    print("Запуск веб-сервера и бота...")
+    # asyncio.gather запускает обе задачи одновременно, чтобы они не блокировали друг друга
+    await asyncio.gather(
+        start_web_server(),
+        dp.start_polling(bot)
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
