@@ -3,7 +3,7 @@ import asyncio
 import os
 import sqlite3
 from aiohttp import web
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -17,7 +17,7 @@ from aiogram.types import (
 TOKEN = "8932791447:AAGB5HfDMv1Jq7yMwVwko9YVl7rubu7F3tM"
 ADMIN_ID = 1231388093  # Ваш ID
 
-# ОБНОВЛЕННЫЕ Координаты (ваша текущая точка из теста)
+# Координаты 
 UNI_LAT = 51.159555 
 UNI_LON = 71.458555
 ALLOWED_RADIUS_METERS = 150  # радиус зоны в метрах
@@ -28,10 +28,17 @@ router = Router()
 def init_db():
     conn = sqlite3.connect("attendance.db")
     cursor = conn.cursor()
+    # Таблица студентов
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS students (
             telegram_id INTEGER PRIMARY KEY,
             full_name TEXT
+        )
+    """)
+    # Таблица заблокированных пользователей
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS banned_users (
+            telegram_id INTEGER PRIMARY KEY
         )
     """)
     conn.commit()
@@ -39,21 +46,43 @@ def init_db():
 
 init_db()
 
+# --- Middleware для проверки на блокировку ---
+class BannedMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event: Message, data):
+        user = data.get("event_from_user")
+        
+        # Проверяем, есть ли пользователь и не является ли он админом (админа заблокировать нельзя)
+        if user and user.id != ADMIN_ID:
+            conn = sqlite3.connect("attendance.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT telegram_id FROM banned_users WHERE telegram_id = ?", (user.id,))
+            banned = cursor.fetchone()
+            conn.close()
+            
+            if banned:
+                if isinstance(event, Message):
+                    await event.answer("⛔️ Доступ закрыт. Вы заблокированы администратором.", reply_markup=ReplyKeyboardRemove())
+                return  # Прерываем обработку сообщения
+
+        return await handler(event, data)
+
+# Подключаем Middleware ко всем сообщениям
+router.message.middleware(BannedMiddleware())
+
 
 # Состояния для FSM
 class RegStates(StatesGroup):
     waiting_for_name = State()
-    waiting_for_del_id = State()
     waiting_for_radius = State()
-
+    waiting_for_ban_id = State()    # Состояние для блокировки
+    waiting_for_unban_id = State()  # Состояние для разблокировки
 
 # Состояния для сессии пары
 current_session = {
     "is_active": False,
-    "present_students": set()  # ID студентов, нажавших "Я здесь"
+    "present_students": set()
 }
 
-# Хранилище геопозиций и задач для отслеживания выхода из зоны
 student_locations = {}
 active_admin_chat_id = None
 
@@ -65,7 +94,9 @@ async def cmd_start(message: Message, state: FSMContext):
         admin_kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="🟢 Начать пару"), KeyboardButton(text="🔴 Завершить и проверить")],
+                [KeyboardButton(text="👀 Кто уже отметился?")],
                 [KeyboardButton(text="👥 Список студентов"), KeyboardButton(text="🗑 Удалить студента")],
+                [KeyboardButton(text="🚫 Блокировать ID"), KeyboardButton(text="✅ Разблокировать ID")],
                 [KeyboardButton(text="⚙️ Изменить радиус зоны")]
             ],
             resize_keyboard=True
@@ -116,6 +147,10 @@ async def cmd_here(message: Message):
         await message.answer("Сейчас нет активной сессии сбора на пару.")
         return
     
+    if message.from_user.id in current_session["present_students"]:
+        await message.answer("⚠️ Вы уже отметились на этой паре! Ожидайте запрос геопозиции от преподавателя.", reply_markup=ReplyKeyboardRemove())
+        return
+
     conn = sqlite3.connect("attendance.db")
     cursor = conn.cursor()
     cursor.execute("SELECT full_name FROM students WHERE telegram_id = ?", (message.from_user.id,))
@@ -127,7 +162,35 @@ async def cmd_here(message: Message):
         return
 
     current_session["present_students"].add(message.from_user.id)
-    await message.answer("✅ Ваша отметка принята! Ожидайте запрос геопозиции от преподавателя.")
+    await message.answer("✅ Ваша отметка принята! Ожидайте запрос геопозиции от преподавателя.", reply_markup=ReplyKeyboardRemove())
+
+
+# --- Админ: Узнать кто отметился в реальном времени ---
+@router.message(F.text == "👀 Кто уже отметился?")
+async def cmd_who_checked_in(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    if not current_session["is_active"]:
+        await message.answer("Сбор отметок сейчас не идет. Начните пару.")
+        return
+
+    if not current_session["present_students"]:
+        await message.answer("Пока ни один студент не нажал «Я здесь».")
+        return
+
+    conn = sqlite3.connect("attendance.db")
+    cursor = conn.cursor()
+    
+    text = f"⏳ <b>Уже отметились ({len(current_session['present_students'])} чел.):</b>\n\n"
+    for idx, t_id in enumerate(current_session["present_students"], 1):
+        cursor.execute("SELECT full_name FROM students WHERE telegram_id = ?", (t_id,))
+        row = cursor.fetchone()
+        name = row[0] if row else "Неизвестный"
+        text += f"{idx}. {name}\n"
+        
+    conn.close()
+    await message.answer(text, parse_mode="HTML")
 
 
 # --- Админ: Управление парой ---
@@ -146,9 +209,9 @@ async def cmd_start_pair(message: Message, bot: Bot):
         resize_keyboard=True
     )
     
-    await message.answer("🔔 Пара началась! Рассылаем приглашения студентам...")
+    await message.answer("🔔 Пара началась! Рассылаем приглашения студентам...\n\n"
+                         "Вы можете использовать кнопку «👀 Кто уже отметился?», чтобы следить за процессом.")
 
-    # Делаем рассылку всем зарегистрированным студентам
     conn = sqlite3.connect("attendance.db")
     cursor = conn.cursor()
     cursor.execute("SELECT telegram_id FROM students")
@@ -184,7 +247,7 @@ async def cmd_stop_pair(message: Message, bot: Bot):
         await message.answer("📋 Ни один студент не нажал кнопку «Я здесь» во время пары.")
         return
 
-    await message.answer("🔍 Запрос геопозиции отправлен всем отметившимся студентам... Ожидаем 15 секунд.")
+    await message.answer("🔍 Запрос геопозиции отправлен всем отметившимся. Ожидаем 60 секунд...")
 
     geo_kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="📍 Отправить геопозицию", request_location=True)]],
@@ -192,20 +255,18 @@ async def cmd_stop_pair(message: Message, bot: Bot):
         one_time_keyboard=True
     )
 
-    # Рассылаем запрос на геопозицию всем, кто отметился
     for t_id in current_session["present_students"]:
         try:
             await bot.send_message(
                 t_id, 
-                "⚠️ Преподаватель запросил проверку геолокации. Пожалуйста, отправьте текущую геопозицию:", 
+                "⚠️ Преподаватель запросил проверку геолокации. У вас есть 1 минута. Пожалуйста, отправьте текущую геопозицию:", 
                 reply_markup=geo_kb
             )
         except Exception:
             pass  
 
-    await asyncio.sleep(15)  # Ждем ответы от студентов
+    await asyncio.sleep(60)
 
-    # Подводим итог и отправляем админу в личку
     conn = sqlite3.connect("attendance.db")
     cursor = conn.cursor()
     
@@ -244,7 +305,6 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 async def handle_location(message: Message, bot: Bot):
     if message.from_user.id in current_session["present_students"]:
         
-        # НОВОЕ: Проверка погрешности геолокации (accuracy)
         accuracy = getattr(message.location, 'horizontal_accuracy', None)
         if accuracy and accuracy > 200:
             await message.answer(
@@ -260,7 +320,6 @@ async def handle_location(message: Message, bot: Bot):
         student_locations[message.from_user.id] = (lat, lon)
         dist = calculate_distance(UNI_LAT, UNI_LON, lat, lon)
         
-        # Если студент покинул допустимый радиус во время или после проверки
         if dist > ALLOWED_RADIUS_METERS and active_admin_chat_id:
             conn = sqlite3.connect("attendance.db")
             cursor = conn.cursor()
@@ -278,7 +337,7 @@ async def handle_location(message: Message, bot: Bot):
         await message.answer("Спасибо! Геопозиция принята.", reply_markup=ReplyKeyboardRemove())
 
 
-# --- Дополнительный админский функционал ---
+# --- Дополнительный админский функционал (Списки, Удаление) ---
 @router.message(F.text == "👥 Список студентов")
 async def admin_list_students(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -288,6 +347,9 @@ async def admin_list_students(message: Message):
     cursor = conn.cursor()
     cursor.execute("SELECT telegram_id, full_name FROM students")
     rows = cursor.fetchall()
+    
+    cursor.execute("SELECT telegram_id FROM banned_users")
+    banned_rows = [r[0] for r in cursor.fetchall()]
     conn.close()
 
     if not rows:
@@ -296,12 +358,12 @@ async def admin_list_students(message: Message):
 
     text = f"📋 <b>Зарегистрированные студенты ({len(rows)}):</b>\n\n"
     for idx, (t_id, name) in enumerate(rows, 1):
-        text += f"{idx}. {name} (ID: <code>{t_id}</code>)\n"
+        status = " (🚫 Забанен)" if t_id in banned_rows else ""
+        text += f"{idx}. {name} (ID: <code>{t_id}</code>){status}\n"
     
     await message.answer(text, parse_mode="HTML")
 
 
-# --- Админ: Удаление студента (через инлайн-кнопки) ---
 @router.message(F.text == "🗑 Удалить студента")
 async def admin_start_delete(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -350,6 +412,73 @@ async def admin_process_delete_callback(callback: CallbackQuery):
     await callback.answer()
 
 
+# --- НОВОЕ: Блокировка и Разблокировка по ID ---
+@router.message(F.text == "🚫 Блокировать ID")
+async def admin_start_ban(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer("Введите Telegram ID пользователя для <b>блокировки</b> (ID можно посмотреть в списке студентов):", parse_mode="HTML")
+    await state.set_state(RegStates.waiting_for_ban_id)
+
+@router.message(RegStates.waiting_for_ban_id)
+async def admin_process_ban(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        target_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Введите корректный ID (только цифры).")
+        return
+
+    if target_id == ADMIN_ID:
+        await message.answer("❌ Вы не можете заблокировать самого себя.")
+        await state.clear()
+        return
+
+    conn = sqlite3.connect("attendance.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO banned_users (telegram_id) VALUES (?)", (target_id,))
+    
+    # Заодно удаляем из активных студентов, если он там есть
+    cursor.execute("DELETE FROM students WHERE telegram_id = ?", (target_id,))
+    
+    conn.commit()
+    conn.close()
+    
+    await state.clear()
+    await message.answer(f"✅ Пользователь с ID <code>{target_id}</code> успешно <b>заблокирован</b>.", parse_mode="HTML")
+
+
+@router.message(F.text == "✅ Разблокировать ID")
+async def admin_start_unban(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer("Введите Telegram ID пользователя для <b>разблокировки</b>:", parse_mode="HTML")
+    await state.set_state(RegStates.waiting_for_unban_id)
+
+@router.message(RegStates.waiting_for_unban_id)
+async def admin_process_unban(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        target_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Введите корректный ID (только цифры).")
+        return
+
+    conn = sqlite3.connect("attendance.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM banned_users WHERE telegram_id = ?", (target_id,))
+    conn.commit()
+    conn.close()
+    
+    await state.clear()
+    await message.answer(f"✅ Пользователь с ID <code>{target_id}</code> успешно <b>разблокирован</b>.", parse_mode="HTML")
+
+
+# --- Изменение радиуса ---
 @router.message(F.text == "⚙️ Изменить радиус зоны")
 async def admin_start_radius(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
@@ -377,7 +506,7 @@ async def admin_process_radius(message: Message, state: FSMContext):
     await message.answer(f"✅ Новый радиус зоны: <b>{ALLOWED_RADIUS_METERS}м</b>", parse_mode="HTML")
 
 
-# --- Настройка фиктивного веб-сервера для Render (Web Service) ---
+# --- Настройка фиктивного веб-сервера для Render ---
 async def handle(request):
     return web.Response(text="Bot is running!")
 
@@ -391,7 +520,7 @@ async def start_web_server():
     await site.start()
 
 
-# --- ОБНОВЛЕННЫЙ Запуск бота и сервера параллельно ---
+# --- Запуск бота и сервера ---
 async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
@@ -400,7 +529,6 @@ async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     
     print("Запуск веб-сервера и бота...")
-    # asyncio.gather запускает обе задачи одновременно, чтобы они не блокировали друг друга
     await asyncio.gather(
         start_web_server(),
         dp.start_polling(bot)
