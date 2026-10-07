@@ -17,41 +17,66 @@ from aiogram.types import (
 TOKEN = "8932791447:AAGB5HfDMv1Jq7yMwVwko9YVl7rubu7F3tM"
 ADMIN_ID = 1231388093  # Ваш ID
 
-# Координаты 
-UNI_LAT = 51.159555 
-UNI_LON = 71.458555
-ALLOWED_RADIUS_METERS = 150  # радиус зоны в метрах
+# Начальные значения по умолчанию
+DEFAULT_UNI_LAT = 51.159555 
+DEFAULT_UNI_LON = 71.458555
+DEFAULT_RADIUS = 150
 
 router = Router()
 
-# --- Инициализация БД ---
+# --- Инициализация БД и работы с настройками ---
 def init_db():
     conn = sqlite3.connect("attendance.db")
     cursor = conn.cursor()
-    # Таблица студентов
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS students (
             telegram_id INTEGER PRIMARY KEY,
             full_name TEXT
         )
     """)
-    # Таблица заблокированных пользователей
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS banned_users (
             telegram_id INTEGER PRIMARY KEY
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    
+    # Значения по умолчанию, если таблица пустая
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('lat', ?)", (str(DEFAULT_UNI_LAT),))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('lon', ?)", (str(DEFAULT_UNI_LON),))
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('radius', ?)", (str(DEFAULT_RADIUS),))
+    
     conn.commit()
     conn.close()
 
 init_db()
 
-# --- Middleware для проверки на блокировку ---
+def get_setting(key, default):
+    conn = sqlite3.connect("attendance.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = cursor.fetchone()
+    conn.close()
+    return float(row[0]) if row and key in ['lat', 'lon'] else (int(row[0]) if row and key == 'radius' else default)
+
+def set_setting(key, value):
+    conn = sqlite3.connect("attendance.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+    conn.commit()
+    conn.close()
+
+
+# --- Middleware для проверки блокировки ---
 class BannedMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: Message, data):
         user = data.get("event_from_user")
-        
-        # Проверяем, есть ли пользователь и не является ли он админом (админа заблокировать нельзя)
         if user and user.id != ADMIN_ID:
             conn = sqlite3.connect("attendance.db")
             cursor = conn.cursor()
@@ -62,39 +87,51 @@ class BannedMiddleware(BaseMiddleware):
             if banned:
                 if isinstance(event, Message):
                     await event.answer("⛔️ Доступ закрыт. Вы заблокированы администратором.", reply_markup=ReplyKeyboardRemove())
-                return  # Прерываем обработку сообщения
-
+                return
         return await handler(event, data)
 
-# Подключаем Middleware ко всем сообщениям
 router.message.middleware(BannedMiddleware())
 
 
-# Состояния для FSM
+# Состояния FSM
 class RegStates(StatesGroup):
     waiting_for_name = State()
     waiting_for_radius = State()
-    waiting_for_ban_id = State()    # Состояние для блокировки
-    waiting_for_unban_id = State()  # Состояние для разблокировки
+    waiting_for_ban_id = State()
+    waiting_for_unban_id = State()
+    waiting_for_uni_location = State()
 
-# Состояния для сессии пары
+
+# Состояние текущей проверки
 current_session = {
     "is_active": False,
-    "present_students": set()
+    "responses": {}  # telegram_id: {"lat": float, "lon": float, "dist": float}
 }
 
-student_locations = {}
-active_admin_chat_id = None
+
+def calculate_distance(lat1, lon1, lat2, lon2):
+    R = 6371000   
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+
+    a = math.sin(dphi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
 
 
-# --- Шаг 1: Регистрация и проверка на админа ---
+# --- Панель управления и Старт ---
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     if message.from_user.id == ADMIN_ID:
+        radius = get_setting('radius', DEFAULT_RADIUS)
+        lat = get_setting('lat', DEFAULT_UNI_LAT)
+        lon = get_setting('lon', DEFAULT_UNI_LON)
+        
         admin_kb = ReplyKeyboardMarkup(
             keyboard=[
-                [KeyboardButton(text="🟢 Начать пару"), KeyboardButton(text="🔴 Завершить и проверить")],
-                [KeyboardButton(text="👀 Кто уже отметился?")],
+                [KeyboardButton(text="🟢 Проверить присутствие"), KeyboardButton(text="🔴 Завершить проверку")],
+                [KeyboardButton(text="👀 Кто ответил"), KeyboardButton(text="🎯 Установить центр ВУЗа")],
                 [KeyboardButton(text="👥 Список студентов"), KeyboardButton(text="🗑 Удалить студента")],
                 [KeyboardButton(text="🚫 Блокировать ID"), KeyboardButton(text="✅ Разблокировать ID")],
                 [KeyboardButton(text="⚙️ Изменить радиус зоны")]
@@ -102,8 +139,9 @@ async def cmd_start(message: Message, state: FSMContext):
             resize_keyboard=True
         )
         await message.answer(
-            f"👋 Панель администратора.\n"
-            f"📍 Текущий радиус геозоны: <b>{ALLOWED_RADIUS_METERS}м</b>",
+            f"👋 <b>Панель администратора</b>\n\n"
+            f"📍 Координаты ВУЗа: <code>{lat}, {lon}</code>\n"
+            f"📏 Радиус зоны: <b>{radius}м</b>",
             reply_markup=admin_kb,
             parse_mode="HTML"
         )
@@ -116,9 +154,9 @@ async def cmd_start(message: Message, state: FSMContext):
     conn.close()
 
     if row:
-        await message.answer(f"Привет, {row[0]}! Вы уже зарегистрированы в системе учета.")
+        await message.answer(f"Привет, {row[0]}! Вы зарегистрированы в системе проверки присутствия.")
     else:
-        await message.answer("Привет! Для участия в учете посещаемости отправьте свои **Имя и Фамилию** (например: *Иван Иванов*).")
+        await message.answer("Привет! Для регистрации отправьте свои **Имя и Фамилию** (например: *Иван Иванов*).")
         await state.set_state(RegStates.waiting_for_name)
 
 @router.message(RegStates.waiting_for_name)
@@ -139,78 +177,20 @@ async def process_name(message: Message, state: FSMContext):
     await message.answer(f"Спасибо, {full_name}! Регистрация прошла успешно.")
 
 
-# --- Студент: Отметка на паре ---
-@router.message(F.text == "📍 Я здесь")
-@router.message(Command("here"))
-async def cmd_here(message: Message):
-    if not current_session["is_active"]:
-        await message.answer("Сейчас нет активной сессии сбора на пару.")
-        return
-    
-    if message.from_user.id in current_session["present_students"]:
-        await message.answer("⚠️ Вы уже отметились на этой паре! Ожидайте запрос геопозиции от преподавателя.", reply_markup=ReplyKeyboardRemove())
-        return
-
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT full_name FROM students WHERE telegram_id = ?", (message.from_user.id,))
-    row = cursor.fetchone()
-    conn.close()
-
-    if not row:
-        await message.answer("Сначала зарегистрируйтесь с помощью /start")
-        return
-
-    current_session["present_students"].add(message.from_user.id)
-    await message.answer("✅ Ваша отметка принята! Ожидайте запрос геопозиции от преподавателя.", reply_markup=ReplyKeyboardRemove())
-
-
-# --- Админ: Узнать кто отметился в реальном времени ---
-@router.message(F.text == "👀 Кто уже отметился?")
-async def cmd_who_checked_in(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    if not current_session["is_active"]:
-        await message.answer("Сбор отметок сейчас не идет. Начните пару.")
-        return
-
-    if not current_session["present_students"]:
-        await message.answer("Пока ни один студент не нажал «Я здесь».")
-        return
-
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    
-    text = f"⏳ <b>Уже отметились ({len(current_session['present_students'])} чел.):</b>\n\n"
-    for idx, t_id in enumerate(current_session["present_students"], 1):
-        cursor.execute("SELECT full_name FROM students WHERE telegram_id = ?", (t_id,))
-        row = cursor.fetchone()
-        name = row[0] if row else "Неизвестный"
-        text += f"{idx}. {name}\n"
-        
-    conn.close()
-    await message.answer(text, parse_mode="HTML")
-
-
-# --- Админ: Управление парой ---
-@router.message(F.text == "🟢 Начать пару")
-@router.message(Command("start_pair"))
-async def cmd_start_pair(message: Message, bot: Bot):
+# --- Экспресс-проверка присутствия ---
+@router.message(F.text == "🟢 Проверить присутствие")
+async def cmd_start_check(message: Message, bot: Bot):
     if message.from_user.id != ADMIN_ID:
         return
     
     current_session["is_active"] = True
-    current_session["present_students"].clear()
-    student_locations.clear()
+    current_session["responses"].clear()
     
-    student_kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📍 Я здесь")]],
-        resize_keyboard=True
+    geo_kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📍 Я в ВУЗе (Отправить гео)", request_location=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True
     )
-    
-    await message.answer("🔔 Пара началась! Рассылаем приглашения студентам...\n\n"
-                         "Вы можете использовать кнопку «👀 Кто уже отметился?», чтобы следить за процессом.")
 
     conn = sqlite3.connect("attendance.db")
     cursor = conn.cursor()
@@ -223,121 +203,172 @@ async def cmd_start_pair(message: Message, bot: Bot):
         try:
             await bot.send_message(
                 t_id, 
-                "🔔 Преподаватель открыл сбор отметок на пару! Нажмите кнопку ниже, чтобы отметиться:", 
-                reply_markup=student_kb
+                "⚠️ <b>Проверка присутствия!</b>\n"
+                "Пожалуйста, нажмите кнопку ниже и подтвердите нахождение на территории ВУЗа:", 
+                reply_markup=geo_kb,
+                parse_mode="HTML"
             )
             count += 1
         except Exception:
             pass  
 
-    await message.answer(f"✅ Пара успешно начата! Уведомления отправлены студентам ({count} чел.).")
-
-
-@router.message(F.text == "🔴 Завершить и проверить")
-@router.message(Command("stop_pair"))
-async def cmd_stop_pair(message: Message, bot: Bot):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    current_session["is_active"] = False
-    global active_admin_chat_id
-    active_admin_chat_id = message.chat.id
-
-    if not current_session["present_students"]:
-        await message.answer("📋 Ни один студент не нажал кнопку «Я здесь» во время пары.")
-        return
-
-    await message.answer("🔍 Запрос геопозиции отправлен всем отметившимся. Ожидаем 60 секунд...")
-
-    geo_kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📍 Отправить геопозицию", request_location=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True
+    await message.answer(
+        f"🚀 <b>Проверка запущена!</b>\n"
+        f"Запросы отправлены студентам ({count} чел.).\n\n"
+        f"Используйте кнопку «👀 Кто ответил» для наблюдения или «🔴 Завершить проверку» для получения отчета.",
+        parse_mode="HTML"
     )
 
-    for t_id in current_session["present_students"]:
-        try:
-            await bot.send_message(
-                t_id, 
-                "⚠️ Преподаватель запросил проверку геолокации. У вас есть 1 минута. Пожалуйста, отправьте текущую геопозицию:", 
-                reply_markup=geo_kb
-            )
-        except Exception:
-            pass  
 
-    await asyncio.sleep(60)
+# --- Прием геопозиции от студента ---
+@router.message(F.location)
+async def handle_location(message: Message, state: FSMContext):
+    # Если админ устанавливает новый центр ВУЗа
+    current_state = await state.get_state()
+    if current_state == RegStates.waiting_for_uni_location.state:
+        if message.from_user.id != ADMIN_ID:
+            return
+        
+        new_lat = message.location.latitude
+        new_lon = message.location.longitude
+        set_setting('lat', new_lat)
+        set_setting('lon', new_lon)
+        
+        await state.clear()
+        await message.answer(
+            f"✅ <b>Новые координаты ВУЗа сохранены!</b>\n"
+            f"Широта: <code>{new_lat}</code>\nДолгота: <code>{new_lon}</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    # Обработка ответа студента
+    if not current_session["is_active"]:
+        await message.answer("Сейчас нет активной проверки присутствия.", reply_markup=ReplyKeyboardRemove())
+        return
+
+    if message.from_user.id in current_session["responses"]:
+        await message.answer("⚠️ Вы уже отправили свою геопозицию для этой проверки.", reply_markup=ReplyKeyboardRemove())
+        return
+
+    accuracy = getattr(message.location, 'horizontal_accuracy', None)
+    if accuracy and accuracy > 200:
+        await message.answer(
+            f"⚠️ Высокая погрешность GPS (~{int(accuracy)}м).\n"
+            "Подойдите ближе к окну, включите Wi-Fi для точности и отправьте геопозицию снова."
+        )
+        return
+
+    lat = message.location.latitude
+    lon = message.location.longitude
+    
+    uni_lat = get_setting('lat', DEFAULT_UNI_LAT)
+    uni_lon = get_setting('lon', DEFAULT_UNI_LON)
+    
+    dist = calculate_distance(uni_lat, uni_lon, lat, lon)
+    current_session["responses"][message.from_user.id] = {
+        "lat": lat, "lon": lon, "dist": dist
+    }
+
+    await message.answer(f"✅ Геопозиция принята! Расстояние до корпуса: ~{int(dist)}м.", reply_markup=ReplyKeyboardRemove())
+
+
+# --- Мониторинг ответов в реальном времени ---
+@router.message(F.text == "👀 Кто ответил")
+async def cmd_who_responded(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    if not current_session["is_active"]:
+        await message.answer("Проверка присутствия сейчас не проводится.")
+        return
+
+    responses = current_session["responses"]
+    if not responses:
+        await message.answer("Пока ни один студент не прислал геопозицию.")
+        return
 
     conn = sqlite3.connect("attendance.db")
     cursor = conn.cursor()
     
-    report = "📊 <b>Итоговый отчёт посещаемости:</b>\n\n"
-    for idx, t_id in enumerate(current_session["present_students"], 1):
+    text = f"⏳ <b>Ответили на проверку ({len(responses)} чел.):</b>\n\n"
+    for idx, (t_id, data) in enumerate(responses.items(), 1):
         cursor.execute("SELECT full_name FROM students WHERE telegram_id = ?", (t_id,))
         row = cursor.fetchone()
         name = row[0] if row else "Неизвестный"
+        text += f"{idx}. {name} — ~{int(data['dist'])}м\n"
         
-        if t_id in student_locations:
-            lat, lon = student_locations[t_id]
-            dist = calculate_distance(UNI_LAT, UNI_LON, lat, lon)
-            if dist <= ALLOWED_RADIUS_METERS:
-                report += f"{idx}. ✅ <b>{name}</b> — На месте (~{int(dist)}м)\n"
-            else:
-                report += f"{idx}. ❌ <b>{name}</b> — Далеко ({int(dist)}м от вуза)\n"
-        else:
-            report += f"{idx}. ❌ <b>{name}</b> — Не прислал геопозицию\n"
-            
     conn.close()
+    await message.answer(text, parse_mode="HTML")
+
+
+# --- Завершение и итоговый отчет ---
+@router.message(F.text == "🔴 Завершить проверку")
+async def cmd_stop_check(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    if not current_session["is_active"]:
+        await message.answer("Нет активной проверки для завершения.")
+        return
+
+    current_session["is_active"] = False
+    responses = current_session["responses"]
+    
+    radius = get_setting('radius', DEFAULT_RADIUS)
+    uni_lat = get_setting('lat', DEFAULT_UNI_LAT)
+    uni_lon = get_setting('lon', DEFAULT_UNI_LON)
+
+    conn = sqlite3.connect("attendance.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT telegram_id, full_name FROM students")
+    all_students = cursor.fetchall()
+    conn.close()
+
+    if not all_students:
+        await message.answer("📋 Список зарегистрированных студентов пуст.")
+        return
+
+    report = f"📊 <b>Отчет присутствия в ВУЗе:</b>\n"
+    report += f"📍 Зона: {radius}м от (<code>{uni_lat:.4f}, {uni_lon:.4f}</code>)\n\n"
+
+    in_count = 0
+    out_count = 0
+    no_resp_count = 0
+
+    for idx, (t_id, name) in enumerate(all_students, 1):
+        if t_id in responses:
+            dist = responses[t_id]["dist"]
+            if dist <= radius:
+                report += f"{idx}. ✅ <b>{name}</b> — В ВУЗе (~{int(dist)}м)\n"
+                in_count += 1
+            else:
+                report += f"{idx}. ❌ <b>{name}</b> — Вне зоны ({int(dist)}м)\n"
+                out_count += 1
+        else:
+            report += f"{idx}. ⚙️ <b>{name}</b> — Не ответил\n"
+            no_resp_count += 1
+
+    report += f"\n📈 <b>Итого:</b> В ВУЗе: {in_count} | Вне зоны: {out_count} | Проигнорировали: {no_resp_count}"
     await message.answer(report, parse_mode="HTML")
 
 
-# --- Обработка геопозиции от студентов ---
-def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371000   
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-
-    a = math.sin(dphi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda/2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
-
-@router.message(F.location)
-async def handle_location(message: Message, bot: Bot):
-    if message.from_user.id in current_session["present_students"]:
-        
-        accuracy = getattr(message.location, 'horizontal_accuracy', None)
-        if accuracy and accuracy > 200:
-            await message.answer(
-                f"⚠️ Ваш телефон определяет координаты с большой погрешностью (~{int(accuracy)}м). "
-                "Это происходит из-за плохих сигналов спутников внутри здания.\n"
-                "Пожалуйста, подойдите ближе к окну, включите Wi-Fi для точности и отправьте геопозицию снова."
-            )
-            return
-
-        lat = message.location.latitude
-        lon = message.location.longitude
-        
-        student_locations[message.from_user.id] = (lat, lon)
-        dist = calculate_distance(UNI_LAT, UNI_LON, lat, lon)
-        
-        if dist > ALLOWED_RADIUS_METERS and active_admin_chat_id:
-            conn = sqlite3.connect("attendance.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT full_name FROM students WHERE telegram_id = ?", (message.from_user.id,))
-            row = cursor.fetchone()
-            conn.close()
-            name = row[0] if row else "Студент"
-            
-            await bot.send_message(
-                active_admin_chat_id,
-                f"⚠️ <b>Внимание!</b> Студент <b>{name}</b> находится вне зоны ({int(dist)}м от вуза) и числится вне пары!",
-                parse_mode="HTML"
-            )
-
-        await message.answer("Спасибо! Геопозиция принята.", reply_markup=ReplyKeyboardRemove())
+# --- Настройка центра ВУЗа ---
+@router.message(F.text == "🎯 Установить центр ВУЗа")
+async def admin_set_uni_start(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📍 Отправить текущие координаты", request_location=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer("Отправьте вашу геопозицию. Она станет новым центром ВУЗа:", reply_markup=kb)
+    await state.set_state(RegStates.waiting_for_uni_location)
 
 
-# --- Дополнительный админский функционал (Списки, Удаление) ---
+# --- Прочий админский функционал ---
 @router.message(F.text == "👥 Список студентов")
 async def admin_list_students(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -412,12 +443,11 @@ async def admin_process_delete_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-# --- НОВОЕ: Блокировка и Разблокировка по ID ---
 @router.message(F.text == "🚫 Блокировать ID")
 async def admin_start_ban(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    await message.answer("Введите Telegram ID пользователя для <b>блокировки</b> (ID можно посмотреть в списке студентов):", parse_mode="HTML")
+    await message.answer("Введите Telegram ID пользователя для <b>блокировки</b>:", parse_mode="HTML")
     await state.set_state(RegStates.waiting_for_ban_id)
 
 @router.message(RegStates.waiting_for_ban_id)
@@ -439,15 +469,12 @@ async def admin_process_ban(message: Message, state: FSMContext):
     conn = sqlite3.connect("attendance.db")
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO banned_users (telegram_id) VALUES (?)", (target_id,))
-    
-    # Заодно удаляем из активных студентов, если он там есть
     cursor.execute("DELETE FROM students WHERE telegram_id = ?", (target_id,))
-    
     conn.commit()
     conn.close()
     
     await state.clear()
-    await message.answer(f"✅ Пользователь с ID <code>{target_id}</code> успешно <b>заблокирован</b>.", parse_mode="HTML")
+    await message.answer(f"✅ Пользователь <code>{target_id}</code> заблокирован.", parse_mode="HTML")
 
 
 @router.message(F.text == "✅ Разблокировать ID")
@@ -475,21 +502,20 @@ async def admin_process_unban(message: Message, state: FSMContext):
     conn.close()
     
     await state.clear()
-    await message.answer(f"✅ Пользователь с ID <code>{target_id}</code> успешно <b>разблокирован</b>.", parse_mode="HTML")
+    await message.answer(f"✅ Пользователь <code>{target_id}</code> разблокирован.", parse_mode="HTML")
 
 
-# --- Изменение радиуса ---
 @router.message(F.text == "⚙️ Изменить радиус зоны")
 async def admin_start_radius(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
     
-    await message.answer(f"Текущий радиус: <b>{ALLOWED_RADIUS_METERS}м</b>. Введите новый радиус в метрах:", parse_mode="HTML")
+    current_r = get_setting('radius', DEFAULT_RADIUS)
+    await message.answer(f"Текущий радиус: <b>{current_r}м</b>. Введите новый радиус в метрах:", parse_mode="HTML")
     await state.set_state(RegStates.waiting_for_radius)
 
 @router.message(RegStates.waiting_for_radius)
 async def admin_process_radius(message: Message, state: FSMContext):
-    global ALLOWED_RADIUS_METERS
     if message.from_user.id != ADMIN_ID:
         return
     
@@ -501,12 +527,12 @@ async def admin_process_radius(message: Message, state: FSMContext):
         await message.answer("❌ Введите корректное число.")
         return
 
-    ALLOWED_RADIUS_METERS = new_radius
+    set_setting('radius', new_radius)
     await state.clear()
-    await message.answer(f"✅ Новый радиус зоны: <b>{ALLOWED_RADIUS_METERS}м</b>", parse_mode="HTML")
+    await message.answer(f"✅ Новый радиус зоны: <b>{new_radius}м</b>", parse_mode="HTML")
 
 
-# --- Настройка фиктивного веб-сервера для Render ---
+# --- Запуск фиктивного веб-сервера Render и Telegram бота ---
 async def handle(request):
     return web.Response(text="Bot is running!")
 
@@ -519,8 +545,6 @@ async def start_web_server():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-
-# --- Запуск бота и сервера ---
 async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
