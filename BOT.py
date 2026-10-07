@@ -12,7 +12,8 @@ from aiogram.types import (
     Message, CallbackQuery, 
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardRemove, WebAppInfo
+    ReplyKeyboardRemove, WebAppInfo,
+    MenuButtonWebApp
 )
 
 # --- КОНФИГУРАЦИЯ ---
@@ -101,7 +102,6 @@ async def init_db():
         await conn.execute("INSERT INTO settings (key, value) VALUES ('lon', $1) ON CONFLICT (key) DO NOTHING", str(DEFAULT_UNI_LON))
         await conn.execute("INSERT INTO settings (key, value) VALUES ('radius', $1) ON CONFLICT (key) DO NOTHING", str(DEFAULT_RADIUS))
 
-        # Наполнение расписанием, если таблица пуста
         count = await conn.fetchval("SELECT COUNT(*) FROM schedule")
         if count == 0:
             for item in INITIAL_SCHEDULE:
@@ -160,7 +160,6 @@ class ScheduleAdminStates(StatesGroup):
     waiting_for_schedule_text = State()
 
 
-# Состояние текущей проверки
 current_session = {
     "is_active": False,
     "responses": {}
@@ -221,7 +220,7 @@ async def schedule_notifications_loop(bot: Bot):
         await asyncio.sleep(30)
 
 
-# --- КЛАВИАТУРЫ ДЛЯ СТУДЕНТОВ И АДМИНА ---
+# --- КЛАВИАТУРЫ ---
 student_main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📅 Расписание"), KeyboardButton(text="📍 Отметиться")]
@@ -858,6 +857,14 @@ async def main():
     dp.include_router(router)
     
     await bot.delete_webhook(drop_pending_updates=True)
+
+    # Устанавливаем постоянную кнопку Mini App слева от поля ввода текста
+    await bot.set_chat_menu_button(
+        menu_button=MenuButtonWebApp(
+            text="📊 Дашборд",
+            web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard")
+        )
+    )
     
     print("Запуск веб-сервера, бота и фоновой рассылки...")
     await asyncio.gather(
