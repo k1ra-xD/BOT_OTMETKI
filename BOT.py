@@ -1,7 +1,7 @@
 import math
 import asyncio
 import os
-import sqlite3
+import asyncpg
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
 from aiogram.filters import Command
@@ -14,7 +14,8 @@ from aiogram.types import (
     ReplyKeyboardRemove
 )
 
-TOKEN = "8932791447:AAGB5HfDMv1Jq7yMwVwko9YVl7rubu7F3tM"
+TOKEN = os.environ.get("BOT_TOKEN", "8932791447:AAGB5HfDMv1Jq7yMwVwko9YVl7rubu7F3tM")
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres.stduhsqtkysawtahgftq:7htTw1GOgUV7XXb2@aws-0-eu-west-1.pooler.supabase.com:6543/postgres")
 ADMIN_ID = 1231388093  # Ваш ID
 
 # Начальные значения по умолчанию
@@ -22,55 +23,47 @@ DEFAULT_UNI_LAT = 51.159555
 DEFAULT_UNI_LON = 71.458555
 DEFAULT_RADIUS = 150
 
+db_pool: asyncpg.Pool = None
 router = Router()
 
-# --- Инициализация БД и работы с настройками ---
-def init_db():
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS students (
-            telegram_id INTEGER PRIMARY KEY,
-            full_name TEXT
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS banned_users (
-            telegram_id INTEGER PRIMARY KEY
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
-    
-    # Значения по умолчанию, если таблица пустая
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('lat', ?)", (str(DEFAULT_UNI_LAT),))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('lon', ?)", (str(DEFAULT_UNI_LON),))
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('radius', ?)", (str(DEFAULT_RADIUS),))
-    
-    conn.commit()
-    conn.close()
+# --- Инициализация БД в Supabase ---
+async def init_db():
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS students (
+                telegram_id BIGINT PRIMARY KEY,
+                full_name TEXT
+            );
+            CREATE TABLE IF NOT EXISTS banned_users (
+                telegram_id BIGINT PRIMARY KEY
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+            INSERT INTO settings (key, value) VALUES ('lat', $1) ON CONFLICT (key) DO NOTHING;
+            INSERT INTO settings (key, value) VALUES ('lon', $2) ON CONFLICT (key) DO NOTHING;
+            INSERT INTO settings (key, value) VALUES ('radius', $3) ON CONFLICT (key) DO NOTHING;
+        """, str(DEFAULT_UNI_LAT), str(DEFAULT_UNI_LON), str(DEFAULT_RADIUS))
 
-init_db()
+async def get_setting(key: str, default):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT value FROM settings WHERE key = $1", key)
+        if not row:
+            return default
+        val = row['value']
+        if key in ['lat', 'lon']:
+            return float(val)
+        elif key == 'radius':
+            return int(val)
+        return val
 
-def get_setting(key, default):
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
-    row = cursor.fetchone()
-    conn.close()
-    return float(row[0]) if row and key in ['lat', 'lon'] else (int(row[0]) if row and key == 'radius' else default)
-
-def set_setting(key, value):
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
-    conn.commit()
-    conn.close()
+async def set_setting(key: str, value):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO settings (key, value) VALUES ($1, $2)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """, key, str(value))
 
 
 # --- Middleware для проверки блокировки ---
@@ -78,11 +71,8 @@ class BannedMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: Message, data):
         user = data.get("event_from_user")
         if user and user.id != ADMIN_ID:
-            conn = sqlite3.connect("attendance.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT telegram_id FROM banned_users WHERE telegram_id = ?", (user.id,))
-            banned = cursor.fetchone()
-            conn.close()
+            async with db_pool.acquire() as conn:
+                banned = await conn.fetchrow("SELECT telegram_id FROM banned_users WHERE telegram_id = $1", user.id)
             
             if banned:
                 if isinstance(event, Message):
@@ -124,9 +114,9 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     if message.from_user.id == ADMIN_ID:
-        radius = get_setting('radius', DEFAULT_RADIUS)
-        lat = get_setting('lat', DEFAULT_UNI_LAT)
-        lon = get_setting('lon', DEFAULT_UNI_LON)
+        radius = await get_setting('radius', DEFAULT_RADIUS)
+        lat = await get_setting('lat', DEFAULT_UNI_LAT)
+        lon = await get_setting('lon', DEFAULT_UNI_LON)
         
         admin_kb = ReplyKeyboardMarkup(
             keyboard=[
@@ -147,14 +137,11 @@ async def cmd_start(message: Message, state: FSMContext):
         )
         return
 
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT full_name FROM students WHERE telegram_id = ?", (message.from_user.id,))
-    row = cursor.fetchone()
-    conn.close()
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", message.from_user.id)
 
     if row:
-        await message.answer(f"Привет, {row[0]}! Вы зарегистрированы в системе проверки присутствия.")
+        await message.answer(f"Привет, {row['full_name']}! Вы зарегистрированы в системе проверки присутствия.")
     else:
         await message.answer("Привет! Для регистрации отправьте свои **Имя и Фамилию** (например: *Иван Иванов*).")
         await state.set_state(RegStates.waiting_for_name)
@@ -166,12 +153,11 @@ async def process_name(message: Message, state: FSMContext):
         await message.answer("Пожалуйста, введите корректно Имя и Фамилию.")
         return
 
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO students (telegram_id, full_name) VALUES (?, ?)", 
-                   (message.from_user.id, full_name))
-    conn.commit()
-    conn.close()
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO students (telegram_id, full_name) VALUES ($1, $2)
+            ON CONFLICT (telegram_id) DO UPDATE SET full_name = EXCLUDED.full_name
+        """, message.from_user.id, full_name)
 
     await state.clear()
     await message.answer(f"Спасибо, {full_name}! Регистрация прошла успешно.")
@@ -192,14 +178,12 @@ async def cmd_start_check(message: Message, bot: Bot):
         one_time_keyboard=True
     )
 
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT telegram_id FROM students")
-    students = cursor.fetchall()
-    conn.close()
+    async with db_pool.acquire() as conn:
+        students = await conn.fetch("SELECT telegram_id FROM students")
 
     count = 0
-    for (t_id,) in students:
+    for row in students:
+        t_id = row['telegram_id']
         try:
             await bot.send_message(
                 t_id, 
@@ -223,7 +207,6 @@ async def cmd_start_check(message: Message, bot: Bot):
 # --- Прием геопозиции от студента ---
 @router.message(F.location)
 async def handle_location(message: Message, state: FSMContext):
-    # Если админ устанавливает новый центр ВУЗа
     current_state = await state.get_state()
     if current_state == RegStates.waiting_for_uni_location.state:
         if message.from_user.id != ADMIN_ID:
@@ -231,8 +214,8 @@ async def handle_location(message: Message, state: FSMContext):
         
         new_lat = message.location.latitude
         new_lon = message.location.longitude
-        set_setting('lat', new_lat)
-        set_setting('lon', new_lon)
+        await set_setting('lat', new_lat)
+        await set_setting('lon', new_lon)
         
         await state.clear()
         await message.answer(
@@ -242,7 +225,6 @@ async def handle_location(message: Message, state: FSMContext):
         )
         return
 
-    # Обработка ответа студента
     if not current_session["is_active"]:
         await message.answer("Сейчас нет активной проверки присутствия.", reply_markup=ReplyKeyboardRemove())
         return
@@ -262,8 +244,8 @@ async def handle_location(message: Message, state: FSMContext):
     lat = message.location.latitude
     lon = message.location.longitude
     
-    uni_lat = get_setting('lat', DEFAULT_UNI_LAT)
-    uni_lon = get_setting('lon', DEFAULT_UNI_LON)
+    uni_lat = await get_setting('lat', DEFAULT_UNI_LAT)
+    uni_lon = await get_setting('lon', DEFAULT_UNI_LON)
     
     dist = calculate_distance(uni_lat, uni_lon, lat, lon)
     current_session["responses"][message.from_user.id] = {
@@ -288,17 +270,13 @@ async def cmd_who_responded(message: Message):
         await message.answer("Пока ни один студент не прислал геопозицию.")
         return
 
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    
     text = f"⏳ <b>Ответили на проверку ({len(responses)} чел.):</b>\n\n"
-    for idx, (t_id, data) in enumerate(responses.items(), 1):
-        cursor.execute("SELECT full_name FROM students WHERE telegram_id = ?", (t_id,))
-        row = cursor.fetchone()
-        name = row[0] if row else "Неизвестный"
-        text += f"{idx}. {name} — ~{int(data['dist'])}м\n"
+    async with db_pool.acquire() as conn:
+        for idx, (t_id, data) in enumerate(responses.items(), 1):
+            row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", t_id)
+            name = row['full_name'] if row else "Неизвестный"
+            text += f"{idx}. {name} — ~{int(data['dist'])}м\n"
         
-    conn.close()
     await message.answer(text, parse_mode="HTML")
 
 
@@ -315,15 +293,12 @@ async def cmd_stop_check(message: Message):
     current_session["is_active"] = False
     responses = current_session["responses"]
     
-    radius = get_setting('radius', DEFAULT_RADIUS)
-    uni_lat = get_setting('lat', DEFAULT_UNI_LAT)
-    uni_lon = get_setting('lon', DEFAULT_UNI_LON)
+    radius = await get_setting('radius', DEFAULT_RADIUS)
+    uni_lat = await get_setting('lat', DEFAULT_UNI_LAT)
+    uni_lon = await get_setting('lon', DEFAULT_UNI_LON)
 
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT telegram_id, full_name FROM students")
-    all_students = cursor.fetchall()
-    conn.close()
+    async with db_pool.acquire() as conn:
+        all_students = await conn.fetch("SELECT telegram_id, full_name FROM students")
 
     if not all_students:
         await message.answer("📋 Список зарегистрированных студентов пуст.")
@@ -336,7 +311,9 @@ async def cmd_stop_check(message: Message):
     out_count = 0
     no_resp_count = 0
 
-    for idx, (t_id, name) in enumerate(all_students, 1):
+    for idx, row in enumerate(all_students, 1):
+        t_id = row['telegram_id']
+        name = row['full_name']
         if t_id in responses:
             dist = responses[t_id]["dist"]
             if dist <= radius:
@@ -374,22 +351,21 @@ async def admin_list_students(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
     
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT telegram_id, full_name FROM students")
-    rows = cursor.fetchall()
-    
-    cursor.execute("SELECT telegram_id FROM banned_users")
-    banned_rows = [r[0] for r in cursor.fetchall()]
-    conn.close()
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT telegram_id, full_name FROM students")
+        banned_rows = await conn.fetch("SELECT telegram_id FROM banned_users")
+
+    banned_ids = [r['telegram_id'] for r in banned_rows]
 
     if not rows:
         await message.answer("📁 База студентов пуста.")
         return
 
     text = f"📋 <b>Зарегистрированные студенты ({len(rows)}):</b>\n\n"
-    for idx, (t_id, name) in enumerate(rows, 1):
-        status = " (🚫 Забанен)" if t_id in banned_rows else ""
+    for idx, row in enumerate(rows, 1):
+        t_id = row['telegram_id']
+        name = row['full_name']
+        status = " (🚫 Забанен)" if t_id in banned_ids else ""
         text += f"{idx}. {name} (ID: <code>{t_id}</code>){status}\n"
     
     await message.answer(text, parse_mode="HTML")
@@ -400,18 +376,17 @@ async def admin_start_delete(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
     
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT telegram_id, full_name FROM students")
-    rows = cursor.fetchall()
-    conn.close()
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT telegram_id, full_name FROM students")
 
     if not rows:
         await message.answer("📁 База студентов пуста, некого удалять.")
         return
 
     inline_kb = InlineKeyboardMarkup(inline_keyboard=[])
-    for t_id, name in rows:
+    for row in rows:
+        t_id = row['telegram_id']
+        name = row['full_name']
         inline_kb.inline_keyboard.append([
             InlineKeyboardButton(text=f"❌ {name}", callback_data=f"del_{t_id}")
         ])
@@ -426,20 +401,15 @@ async def admin_process_delete_callback(callback: CallbackQuery):
 
     target_id = int(callback.data.split("_")[1])
 
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT full_name FROM students WHERE telegram_id = ?", (target_id,))
-    row = cursor.fetchone()
-
-    if row:
-        cursor.execute("DELETE FROM students WHERE telegram_id = ?", (target_id,))
-        conn.commit()
-        name = row[0]
-        await callback.message.edit_text(f"✅ Студент <b>{name}</b> успешно удален из базы.", parse_mode="HTML")
-    else:
-        await callback.answer("❌ Студент уже удален или не найден.", show_alert=True)
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", target_id)
+        if row:
+            await conn.execute("DELETE FROM students WHERE telegram_id = $1", target_id)
+            name = row['full_name']
+            await callback.message.edit_text(f"✅ Студент <b>{name}</b> успешно удален из базы.", parse_mode="HTML")
+        else:
+            await callback.answer("❌ Студент уже удален или не найден.", show_alert=True)
     
-    conn.close()
     await callback.answer()
 
 
@@ -466,12 +436,9 @@ async def admin_process_ban(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO banned_users (telegram_id) VALUES (?)", (target_id,))
-    cursor.execute("DELETE FROM students WHERE telegram_id = ?", (target_id,))
-    conn.commit()
-    conn.close()
+    async with db_pool.acquire() as conn:
+        await conn.execute("INSERT INTO banned_users (telegram_id) VALUES ($1) ON CONFLICT (telegram_id) DO NOTHING", target_id)
+        await conn.execute("DELETE FROM students WHERE telegram_id = $1", target_id)
     
     await state.clear()
     await message.answer(f"✅ Пользователь <code>{target_id}</code> заблокирован.", parse_mode="HTML")
@@ -495,11 +462,8 @@ async def admin_process_unban(message: Message, state: FSMContext):
         await message.answer("❌ Введите корректный ID (только цифры).")
         return
 
-    conn = sqlite3.connect("attendance.db")
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM banned_users WHERE telegram_id = ?", (target_id,))
-    conn.commit()
-    conn.close()
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM banned_users WHERE telegram_id = $1", target_id)
     
     await state.clear()
     await message.answer(f"✅ Пользователь <code>{target_id}</code> разблокирован.", parse_mode="HTML")
@@ -510,7 +474,7 @@ async def admin_start_radius(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
     
-    current_r = get_setting('radius', DEFAULT_RADIUS)
+    current_r = await get_setting('radius', DEFAULT_RADIUS)
     await message.answer(f"Текущий радиус: <b>{current_r}м</b>. Введите новый радиус в метрах:", parse_mode="HTML")
     await state.set_state(RegStates.waiting_for_radius)
 
@@ -527,12 +491,12 @@ async def admin_process_radius(message: Message, state: FSMContext):
         await message.answer("❌ Введите корректное число.")
         return
 
-    set_setting('radius', new_radius)
+    await set_setting('radius', new_radius)
     await state.clear()
     await message.answer(f"✅ Новый радиус зоны: <b>{new_radius}м</b>", parse_mode="HTML")
 
 
-# --- Запуск фиктивного веб-сервера Render и Telegram бота ---
+# --- Запуск веб-сервера Render и Telegram бота ---
 async def handle(request):
     return web.Response(text="Bot is running!")
 
@@ -546,6 +510,16 @@ async def start_web_server():
     await site.start()
 
 async def main():
+    global db_pool
+    print("Подключение к базе данных Supabase PostgreSQL...")
+    db_pool = await asyncpg.create_pool(
+        dsn=DATABASE_URL,
+        statement_cache_size=0
+    )
+    
+    await init_db()
+    print("База данных инициализирована.")
+
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
