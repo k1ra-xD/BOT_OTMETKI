@@ -517,6 +517,60 @@ async def main():
         statement_cache_size=0
     )
     
+# --- Инициализация БД в Supabase ---
+async def init_db():
+    async with db_pool.acquire() as conn:
+        # 1. Создаем таблицы (одной транзакцией без параметров)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS students (
+                telegram_id BIGINT PRIMARY KEY,
+                full_name TEXT
+            );
+            CREATE TABLE IF NOT EXISTS banned_users (
+                telegram_id BIGINT PRIMARY KEY
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+        """)
+        
+        # 2. Вставляем значения по умолчанию по отдельности
+        await conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('lat', $1) ON CONFLICT (key) DO NOTHING",
+            str(DEFAULT_UNI_LAT)
+        )
+        await conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('lon', $1) ON CONFLICT (key) DO NOTHING",
+            str(DEFAULT_UNI_LON)
+        )
+        await conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('radius', $1) ON CONFLICT (key) DO NOTHING",
+            str(DEFAULT_RADIUS)
+        )
+
+
+# --- Запуск веб-сервера Render и Telegram бота ---
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.add_routes([web.get('/', handle)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+async def main():
+    global db_pool
+    print("Подключение к базе данных Supabase PostgreSQL...")
+    db_pool = await asyncpg.create_pool(
+        dsn=DATABASE_URL,
+        statement_cache_size=0
+    )
+    
     await init_db()
     print("База данных инициализирована.")
 
