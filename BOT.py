@@ -371,7 +371,11 @@ async def update_schedule_workflow(status_msg: Message):
     
     # ЭТАП 1: Скачивание файла с сайта
     try:
-        await status_msg.edit_text("⏳ <b>[1/5]</b> Подключение к <code>esil.edu.kz</code> и поиск файла...", parse_mode="HTML")
+        await status_msg.edit_text(
+    f"✅ <b>[4/5]</b> Извлечение предметов завершено! Найдено пар: <b>{len(parsed_lessons)}</b>.\n"
+    f"⏳ <b>[5/5]</b> Сохранение расписания в Supabase...", 
+    parse_mode="HTML"
+)
         
         def download_file():
             res = requests.get(SCHEDULE_PAGE_URL, headers=headers, timeout=30)
