@@ -89,6 +89,11 @@ def create_web_app(get_db_pool, current_session):
             "responses": responses_data
         })
 
+    async def handle_root(request):
+        return web.Response(text="Bot is running! 🚀", content_type="text/plain", status=200)
+
+    app.router.add_get('/', handle_root)
+    app.router.add_get('/ping', handle_root)
     app.router.add_get('/dashboard', handle_dashboard)
     app.router.add_get('/api/stats', handle_api_stats)
     return app
