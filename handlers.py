@@ -12,6 +12,8 @@ from aiogram.types import (
     ReplyKeyboardRemove, WebAppInfo
 )
 
+from aiogram import Bot
+from aiogram.types import MenuButtonDefault, MenuButtonWebApp, WebAppInfo
 from config import ADMIN_ID, DEFAULT_RADIUS, DEFAULT_UNI_LAT, DEFAULT_UNI_LON, DAYS_MAP, ASTANA_TZ, TARGET_GROUP
 from db import get_setting, set_setting
 from parser import download_schedule_file, parse_excel_schedule
@@ -471,3 +473,27 @@ async def admin_process_radius(message: Message, state: FSMContext):
     await set_setting(get_db_pool(), 'radius', new_radius)
     await state.clear()
     await message.answer(f"✅ Новый радиус: <b>{new_radius}м</b>", parse_mode="HTML")
+
+
+@router.message(Command("start"))
+async def cmd_start(message: Message, state: FSMContext, bot: Bot):  # <-- Добавили bot: Bot
+    if message.from_user.id == ADMIN_ID:
+        # Включаем WebApp кнопку снизу ТОЛЬКО для вас (админа)
+        await bot.set_chat_menu_button(
+            chat_id=message.chat.id,
+            menu_button=MenuButtonWebApp(
+                text="📊 Дашборд",
+                web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard")
+            )
+        )
+        
+        # ... дальше ваш текущий код для админа ...
+        pool = get_db_pool()
+        # ...
+        return
+
+    # Для ВСЕХ остальных пользователей (студентов) отключаем WebApp кнопку
+    await bot.set_chat_menu_button(
+        chat_id=message.chat.id,
+        menu_button=MenuButtonDefault()
+    )
