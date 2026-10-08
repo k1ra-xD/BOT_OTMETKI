@@ -47,7 +47,7 @@ async def schedule_notifications_loop(bot: Bot):
 
 async def main():
     print("🚀 Запуск бота...")
-    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    db_pool = await asyncpg.create_pool(DATABASE_URL, statement_cache_size=0)
     set_db_pool(db_pool)
     await init_db(db_pool)
 
