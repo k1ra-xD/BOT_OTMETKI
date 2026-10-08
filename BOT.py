@@ -1,5 +1,6 @@
 import math
 import asyncio
+import re
 import os
 import requests
 from bs4 import BeautifulSoup
@@ -64,14 +65,16 @@ def get_real_cell_value(sheet, row: int, col: int):
 
 def extract_lesson_details(raw_text: str):
     """ Разбирает сырой текст ячейки на тип занятия, преподавателя и аудиторию. """
-    lesson_type = "занятие"
     lt_lower = raw_text.lower()
-    if "лек" in lt_lower:
-        lesson_type = "лекция"
-    elif "сем" in lt_lower:
+
+    # Точная проверка типа занятия по границам слов (чтобы "интелЛЕКта" не триггерило лекцию)
+    lesson_type = "занятие"
+    if re.search(r'\b(сем|семинар|сем\.)\b', lt_lower):
         lesson_type = "семинар"
-    elif "прак" in lt_lower:
+    elif re.search(r'\b(прак|практика|лаб|лабораторная)\b', lt_lower):
         lesson_type = "практика"
+    elif re.search(r'\b(лек|лекция|лек\.)\b', lt_lower):
+        lesson_type = "лекция"
 
     room = "не указана"
     if "ауд" in lt_lower:
@@ -92,7 +95,7 @@ def extract_lesson_details(raw_text: str):
         if "ауд" in t_part.lower():
             t_part = t_part[:t_part.lower().find("ауд")].strip()
         teacher = t_part if t_part else "не указан"
-    elif len(comma_parts) == 2 and not any(k in comma_parts[1].lower() for k in ["лек", "сем", "прак"]):
+    elif len(comma_parts) == 2 and not re.search(r'\b(лек|сем|прак|лаб)\b', comma_parts[1].lower()):
         teacher = comma_parts[1]
 
     return subject, lesson_type, teacher, room
