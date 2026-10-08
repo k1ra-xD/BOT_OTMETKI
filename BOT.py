@@ -1,6 +1,9 @@
 import math
 import asyncio
 import os
+import requests
+from bs4 import BeautifulSoup
+import openpyxl
 from datetime import datetime, timedelta, timezone
 import asyncpg
 from aiohttp import web
@@ -12,14 +15,18 @@ from aiogram.types import (
     Message, CallbackQuery, 
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardRemove, WebAppInfo,
-    MenuButtonWebApp
+    ReplyKeyboardRemove, WebAppInfo
 )
 
 # --- КОНФИГУРАЦИЯ ---
 TOKEN = os.environ.get("BOT_TOKEN", "8932791447:AAGB5HfDMv1Jq7yMwVwko9YVl7rubu7F3tM")
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres.stduhsqtkysawtahgftq:7htTw1GOgUV7XXb2@aws-0-eu-west-1.pooler.supabase.com:6543/postgres")
 ADMIN_ID = 1231388093  # Ваш ID
+
+SCHEDULE_PAGE_URL = "https://esil.edu.kz/students_schedule/"
+LOCAL_FILE_NAME = "target_schedule.xlsx"
+TARGET_GROUP = "Б-ИТЗД 26/23 Р" 
+TARGET_SHEET = "рус Прик 1,3 1,2"
 
 DEFAULT_UNI_LAT = 51.159555 
 DEFAULT_UNI_LON = 71.458555
@@ -40,35 +47,55 @@ DAYS_MAP = {
     6: "Воскресенье"
 }
 
-# Исходное расписание для заливки в БД
-INITIAL_SCHEDULE = [
-    # Понедельник (0)
-    (0, "10:00", "10:50", "История Казахстана", "лекция", "Сеитов Е.Т.", "ауд. 211"),
-    (0, "11:00", "11:50", "История Казахстана", "лекция", "Сеитов Е.Т.", "ауд. 211"),
-    (0, "12:00", "12:50", "Дискретная математика и теория вероятностей", "семинар", "Есентемирова А.К.", "ауд. 212"),
-    (0, "13:00", "13:50", "Объектно-ориентированное программирование", "лекция", "ст. преп. Исаева М.А.", "ауд. 211"),
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ПАРСИНГА EXCEL ---
+def get_real_cell_value(sheet, row: int, col: int):
+    """
+    Возвращает реальное значение ячейки с учетом горизонтального/вертикального объединения (Merged Cells).
+    """
+    cell_val = sheet.cell(row=row, column=col).value
+    if cell_val is not None:
+        return cell_val
+    
+    for rng in sheet.merged_cells.ranges:
+        if rng.min_row <= row <= rng.max_row and rng.min_col <= col <= rng.max_col:
+            return sheet.cell(row=rng.min_row, column=rng.min_col).value
+            
+    return None
 
-    # Вторник (1)
-    (1, "11:00", "11:50", "Модернизация и ремонт ПК", "семинар", "Мысжанов З.М.", "ауд. 410"),
-    (1, "12:00", "12:50", "Философия", "семинар", "Жукенова А.А.", "не указана"),
-    (1, "13:00", "13:50", "Дискретная математика и теория вероятностей", "лекция", "ст. преп. Есентемирова А.К.", "ауд. 212"),
-    (1, "14:00", "14:50", "Модернизация и ремонт ПК", "лекция", "к.т.н. Кульмамиров С.А.", "ауд. 414"),
-    (1, "15:00", "15:50", "Модернизация и ремонт ПК", "семинар", "Мысжанов З.М.", "ауд. 410"),
+def extract_lesson_details(raw_text: str):
+    """ Разбирает сырой текст ячейки на тип занятия, преподавателя и аудиторию. """
+    lesson_type = "занятие"
+    lt_lower = raw_text.lower()
+    if "лек" in lt_lower:
+        lesson_type = "лекция"
+    elif "сем" in lt_lower:
+        lesson_type = "семинар"
+    elif "прак" in lt_lower:
+        lesson_type = "практика"
 
-    # Среда (2)
-    (2, "15:00", "15:50", "Объектно-ориентированное программирование", "семинар", "ст. преп. Исаева М.А.", "ауд. 400"),
-    (2, "16:00", "16:50", "Дискретная математика и теория вероятностей", "семинар", "Есентемирова А.К.", "не указана"),
+    room = "не указана"
+    if "ауд" in lt_lower:
+        parts = lt_lower.split("ауд")
+        if len(parts) > 1:
+            r_cand = parts[1].strip(" .:")
+            if r_cand:
+                room = f"ауд. {r_cand.split()[0]}"
+    elif "онлайн" in lt_lower:
+        room = "Онлайн"
 
-    # Четверг (3)
-    (3, "10:00", "10:50", "Философия", "лекция", "Жукенова А.А.", "Онлайн"),
-    (3, "11:00", "11:50", "Философия", "лекция", "Жукенова А.А.", "Онлайн"),
+    comma_parts = [p.strip() for p in raw_text.split(",") if p.strip()]
+    subject = comma_parts[0] if len(comma_parts) > 0 else raw_text
+    
+    teacher = "не указан"
+    if len(comma_parts) > 2:
+        t_part = comma_parts[2]
+        if "ауд" in t_part.lower():
+            t_part = t_part[:t_part.lower().find("ауд")].strip()
+        teacher = t_part if t_part else "не указан"
+    elif len(comma_parts) == 2 and not any(k in comma_parts[1].lower() for k in ["лек", "сем", "прак"]):
+        teacher = comma_parts[1]
 
-    # Пятница (4)
-    (4, "10:00", "10:50", "Системы искусственного интеллекта", "семинар", "Мысжанов З.М.", "не указана"),
-    (4, "11:00", "11:50", "Системы искусственного интеллекта", "семинар", "Мысжанов З.М.", "не указана"),
-    (4, "13:00", "13:50", "Системы искусственного интеллекта", "лекция", "ст. преп. Абдрахманова А.З.", "ауд. 212"),
-    (4, "14:00", "14:50", "История Казахстана", "семинар", "Сеитов Э.Т.", "не указана")
-]
+    return subject, lesson_type, teacher, room
 
 
 # --- ИНИЦИАЛИЗАЦИЯ БД ---
@@ -101,14 +128,6 @@ async def init_db():
         await conn.execute("INSERT INTO settings (key, value) VALUES ('lat', $1) ON CONFLICT (key) DO NOTHING", str(DEFAULT_UNI_LAT))
         await conn.execute("INSERT INTO settings (key, value) VALUES ('lon', $1) ON CONFLICT (key) DO NOTHING", str(DEFAULT_UNI_LON))
         await conn.execute("INSERT INTO settings (key, value) VALUES ('radius', $1) ON CONFLICT (key) DO NOTHING", str(DEFAULT_RADIUS))
-
-        count = await conn.fetchval("SELECT COUNT(*) FROM schedule")
-        if count == 0:
-            for item in INITIAL_SCHEDULE:
-                await conn.execute("""
-                    INSERT INTO schedule (day_of_week, time_start, time_end, subject, lesson_type, teacher, room)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                """, *item)
 
 
 async def get_setting(key: str, default):
@@ -258,7 +277,8 @@ async def cmd_start(message: Message, state: FSMContext):
 
         admin_inline_panel = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📊 WebApp Дашборд", web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard"))],
-            [InlineKeyboardButton(text="✏️ Обновить расписание", callback_data="admin_edit_schedule")]
+            [InlineKeyboardButton(text="🔄 Авто-обновить с сайта (esil.edu.kz)", callback_data="admin_auto_update_schedule")],
+            [InlineKeyboardButton(text="✏️ Ввести расписание вручную", callback_data="admin_edit_schedule")]
         ])
 
         await message.answer(
@@ -268,7 +288,7 @@ async def cmd_start(message: Message, state: FSMContext):
             reply_markup=admin_kb,
             parse_mode="HTML"
         )
-        await message.answer("Дополнительные инструменты управления:", reply_markup=admin_inline_panel)
+        await message.answer("Управление расписанием и статистикой:", reply_markup=admin_inline_panel)
         return
 
     async with db_pool.acquire() as conn:
@@ -316,10 +336,11 @@ async def format_day_schedule(conn, day_code: int) -> str:
     
     text = f"🗓 <b>{day_name}:</b>\n\n"
     for l in lessons:
+        teacher_str = f"👨‍🏫 {l['teacher']} | " if l['teacher'] != 'не указан' else ""
         text += (
             f"⏰ <code>{l['time_start']} - {l['time_end']}</code>\n"
             f"📖 <b>{l['subject']}</b> ({l['lesson_type']})\n"
-            f"👨‍🏫 {l['teacher']} | 🚪 <b>{l['room']}</b>\n"
+            f"{teacher_str}🚪 <b>{l['room']}</b>\n"
             f"-------------------------------\n"
         )
     return text
@@ -343,535 +364,107 @@ async def process_schedule_callback(callback: CallbackQuery):
     await callback.answer()
 
 
-# --- РЕДАКТИРОВАНИЕ РАСПИСАНИЯ АДМИНОМ ---
-@router.callback_query(F.data == "admin_edit_schedule")
-async def start_schedule_edit(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
-        return await callback.answer("У вас нет прав.", show_alert=True)
-        
-    await state.set_state(ScheduleAdminStates.waiting_for_schedule_text)
-    await callback.message.answer(
-        "📝 <b>Отправьте новое расписание текстом в формате:</b>\n\n"
-        "<code>Понедельник\n"
-        "10.00-10.50 Предмет, лекция, Преподаватель ауд 211\n"
-        "11.00-11.50 Предмет, семинар, Преподаватель ауд 212</code>\n\n"
-        "Для отмены отправьте /cancel"
-    )
-    await callback.answer()
-
-@router.message(ScheduleAdminStates.waiting_for_schedule_text)
-async def process_new_schedule_text(message: Message, state: FSMContext):
-    if message.text == "/cancel":
-        await state.clear()
-        return await message.answer("Обновление расписания отменено.")
+# --- АВТОМАТИЧЕСКОЕ И РУЧНОЕ ОБНОВЛЕНИЕ РАСПИСАНИЯ ---
+async def update_schedule_workflow(status_msg: Message):
+    """ Фоновая задача с поэтапным информированием админа о прогрессе парсинга. """
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
-    lines = message.text.strip().split("\n")
-    current_day = None
-    parsed_items = []
-    
-    day_mapping = {
-        "понедельник": 0, "вторник": 1, "среда": 2, 
-        "четверг": 3, "пятница": 4, "суббота": 5, "воскресенье": 6
-    }
-
+    # ЭТАП 1: Скачивание файла с сайта
     try:
-        for line in lines:
-            line_clean = line.strip()
-            if not line_clean:
-                continue
+        await status_msg.edit_text("⏳ <b>[1/5]</b> Подключение к <code>esil.edu.kz</code> и поиск файла...", parse_mode="HTML")
+        
+        def download_file():
+            res = requests.get(SCHEDULE_PAGE_URL, headers=headers, timeout=30)
+            res.raise_for_status()
+            soup = BeautifulSoup(res.text, 'html.parser')
             
-            if line_clean.lower() in day_mapping:
-                current_day = day_mapping[line_clean.lower()]
-                continue
+            target_url = None
+            for row in soup.find_all('tr'):
+                text = row.get_text()
+                if "Расписание занятий 2 курса (4 года)" in text or "1 курса (3 года)" in text:
+                    link_tag = row.find('a', href=True)
+                    if link_tag:
+                        href = link_tag['href']
+                        target_url = href if href.startswith("http") else "https://esil.edu.kz" + href
+                        break
+            if not target_url:
+                raise Exception("Не найдена ссылка на файл расписания 2 курса на сайте.")
                 
-            if current_day is not None and "-" in line_clean:
-                parts = line_clean.split(" ", 1)
-                times = parts[0].replace(".", ":").split("-")
-                t_start, t_end = times[0], times[1]
-                details = parts[1] if len(parts) > 1 else ""
-                
-                room = "не указана"
-                if "ауд" in details.lower():
-                    details_split = details.lower().split("ауд")
-                    room = "ауд " + details_split[1].strip(" .")
-                    details = details[:details.lower().find("ауд")]
-                elif "онлайн" in details.lower():
-                    room = "Онлайн"
+            f_res = requests.get(target_url, headers=headers, timeout=30)
+            f_res.raise_for_status()
+            with open(LOCAL_FILE_NAME, "wb") as f:
+                f.write(f_res.content)
 
-                parsed_items.append((current_day, t_start, t_end, details.strip(", "), "занятие", "", room))
-
-        if not parsed_items:
-            return await message.answer("⚠️ Не удалось распознать формат. Попробуйте еще раз или нажмите /cancel.")
-
-        async with db_pool.acquire() as conn:
-            await conn.execute("TRUNCATE TABLE schedule")
-            for item in parsed_items:
-                await conn.execute("""
-                    INSERT INTO schedule (day_of_week, time_start, time_end, subject, lesson_type, teacher, room)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                """, *item)
-
-        await state.clear()
-        await message.answer("✅ <b>Расписание успешно обновлено в Supabase!</b>", parse_mode="HTML")
-
+        await asyncio.to_thread(download_file)
+        await status_msg.edit_text("✅ <b>[1/5]</b> Файл расписания успешно скачан!\n⏳ <b>[2/5]</b> Открытие структуры Excel...", parse_mode="HTML")
     except Exception as e:
-        await message.answer(f"❌ Ошибка разбора: {e}")
-
-
-# --- ЭКСПРЕСС-ПРОВЕРКА И ГЕОПОЗИЦИЯ ---
-@router.message(F.text == "🟢 Проверить присутствие")
-async def cmd_start_check(message: Message, bot: Bot):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    current_session["is_active"] = True
-    current_session["responses"].clear()
-    
-    geo_kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📍 Я в ВУЗе (Отправить гео)", request_location=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-
-    async with db_pool.acquire() as conn:
-        students = await conn.fetch("SELECT telegram_id FROM students")
-
-    count = 0
-    for row in students:
-        t_id = row['telegram_id']
-        try:
-            await bot.send_message(
-                t_id, 
-                "⚠️ <b>Проверка присутствия!</b>\n"
-                "Пожалуйста, нажмите кнопку ниже и подтвердите нахождение на территории ВУЗа:", 
-                reply_markup=geo_kb,
-                parse_mode="HTML"
-            )
-            count += 1
-        except Exception:
-            pass  
-
-    await message.answer(
-        f"🚀 <b>Проверка запущена!</b>\n"
-        f"Запросы отправлены студентам ({count} чел.).\n\n"
-        f"Используйте кнопку «👀 Кто ответил» для наблюдения или «🔴 Завершить проверку» для получения отчета.",
-        parse_mode="HTML"
-    )
-
-@router.message(F.text == "📍 Отметиться")
-async def student_manual_checkin(message: Message):
-    if not current_session["is_active"]:
-        return await message.answer("Сейчас нет активной проверки присутствия.")
-    
-    geo_kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📍 Я в ВУЗе (Отправить гео)", request_location=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-    await message.answer("Нажмите кнопку ниже для отправки геопозиции:", reply_markup=geo_kb)
-
-@router.message(F.location)
-async def handle_location(message: Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state == RegStates.waiting_for_uni_location.state:
-        if message.from_user.id != ADMIN_ID:
-            return
-        
-        new_lat = message.location.latitude
-        new_lon = message.location.longitude
-        await set_setting('lat', new_lat)
-        await set_setting('lon', new_lon)
-        
-        await state.clear()
-        await message.answer(
-            f"✅ <b>Новые координаты ВУЗа сохранены!</b>\n"
-            f"Широта: <code>{new_lat}</code>\nДолгота: <code>{new_lon}</code>",
-            parse_mode="HTML"
-        )
+        await status_msg.edit_text(f"❌ <b>Ошибка на этапе 1 (скачивание):</b> {e}", parse_mode="HTML")
         return
 
-    if not current_session["is_active"]:
-        await message.answer("Сейчас нет активной проверки присутствия.", reply_markup=ReplyKeyboardRemove())
-        return
-
-    if message.from_user.id in current_session["responses"]:
-        await message.answer("⚠️ Вы уже отправили свою геопозицию для этой проверки.", reply_markup=ReplyKeyboardRemove())
-        return
-
-    accuracy = getattr(message.location, 'horizontal_accuracy', None)
-    if accuracy and accuracy > 200:
-        await message.answer(
-            f"⚠️ Высокая погрешность GPS (~{int(accuracy)}м).\n"
-            "Подойдите ближе к окну, включите Wi-Fi для точности и отправьте геопозицию снова."
-        )
-        return
-
-    lat = message.location.latitude
-    lon = message.location.longitude
-    
-    uni_lat = await get_setting('lat', DEFAULT_UNI_LAT)
-    uni_lon = await get_setting('lon', DEFAULT_UNI_LON)
-    
-    dist = calculate_distance(uni_lat, uni_lon, lat, lon)
-    current_session["responses"][message.from_user.id] = {
-        "lat": lat, "lon": lon, "dist": dist
-    }
-
-    await message.answer(f"✅ Геопозиция принята! Расстояние до корпуса: ~{int(dist)}м.", reply_markup=student_main_kb)
-
-
-# --- МОНИТОРИНГ И ИТОГОВЫЙ ОТЧЕТ ---
-@router.message(F.text == "👀 Кто ответил")
-async def cmd_who_responded(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    if not current_session["is_active"]:
-        await message.answer("Проверка присутствия сейчас не проводится.")
-        return
-
-    responses = current_session["responses"]
-    if not responses:
-        await message.answer("Пока ни один студент не прислал геопозицию.")
-        return
-
-    text = f"⏳ <b>Ответили на проверку ({len(responses)} чел.):</b>\n\n"
-    async with db_pool.acquire() as conn:
-        for idx, (t_id, data) in enumerate(responses.items(), 1):
-            row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", t_id)
-            name = row['full_name'] if row else "Неизвестный"
-            text += f"{idx}. {name} — ~{int(data['dist'])}м\n"
-        
-    await message.answer(text, parse_mode="HTML")
-
-@router.message(F.text == "🔴 Завершить проверку")
-async def cmd_stop_check(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    if not current_session["is_active"]:
-        await message.answer("Нет активной проверки для завершения.")
-        return
-
-    current_session["is_active"] = False
-    responses = current_session["responses"]
-    
-    radius = await get_setting('radius', DEFAULT_RADIUS)
-    uni_lat = await get_setting('lat', DEFAULT_UNI_LAT)
-    uni_lon = await get_setting('lon', DEFAULT_UNI_LON)
-
-    async with db_pool.acquire() as conn:
-        all_students = await conn.fetch("SELECT telegram_id, full_name FROM students")
-
-    if not all_students:
-        await message.answer("📋 Список зарегистрированных студентов пуст.")
-        return
-
-    report = f"📊 <b>Отчет присутствия в ВУЗе:</b>\n"
-    report += f"📍 Зона: {radius}м от (<code>{uni_lat:.4f}, {uni_lon:.4f}</code>)\n\n"
-
-    in_count = 0
-    out_count = 0
-    no_resp_count = 0
-
-    for idx, row in enumerate(all_students, 1):
-        t_id = row['telegram_id']
-        name = row['full_name']
-        if t_id in responses:
-            dist = responses[t_id]["dist"]
-            if dist <= radius:
-                report += f"{idx}. ✅ <b>{name}</b> — В ВУЗе (~{int(dist)}м)\n"
-                in_count += 1
-            else:
-                report += f"{idx}. ❌ <b>{name}</b> — Вне зоны ({int(dist)}м)\n"
-                out_count += 1
-        else:
-            report += f"{idx}. ⚙️ <b>{name}</b> — Не ответил\n"
-            no_resp_count += 1
-
-    report += f"\n📈 <b>Итого:</b> В ВУЗе: {in_count} | Вне зоны: {out_count} | Проигнорировали: {no_resp_count}"
-    await message.answer(report, parse_mode="HTML")
-
-
-# --- НАСТРОЙКИ АДМИНИСТРАТОРА ---
-@router.message(F.text == "🎯 Установить центр ВУЗа")
-async def admin_set_uni_start(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📍 Отправить текущие координаты", request_location=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-    await message.answer("Отправьте вашу геопозицию. Она станет новым центром ВУЗа:", reply_markup=kb)
-    await state.set_state(RegStates.waiting_for_uni_location)
-
-@router.message(F.text == "👥 Список студентов")
-async def admin_list_students(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT telegram_id, full_name FROM students")
-        banned_rows = await conn.fetch("SELECT telegram_id FROM banned_users")
-
-    banned_ids = [r['telegram_id'] for r in banned_rows]
-
-    if not rows:
-        await message.answer("📁 База студентов пуста.")
-        return
-
-    text = f"📋 <b>Зарегистрированные студенты ({len(rows)}):</b>\n\n"
-    for idx, row in enumerate(rows, 1):
-        t_id = row['telegram_id']
-        name = row['full_name']
-        status = " (🚫 Забанен)" if t_id in banned_ids else ""
-        text += f"{idx}. {name} (ID: <code>{t_id}</code>){status}\n"
-    
-    await message.answer(text, parse_mode="HTML")
-
-@router.message(F.text == "🗑 Удалить студента")
-async def admin_start_delete(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT telegram_id, full_name FROM students")
-
-    if not rows:
-        await message.answer("📁 База студентов пуста, некого удалять.")
-        return
-
-    inline_kb = InlineKeyboardMarkup(inline_keyboard=[])
-    for row in rows:
-        t_id = row['telegram_id']
-        name = row['full_name']
-        inline_kb.inline_keyboard.append([
-            InlineKeyboardButton(text=f"❌ {name}", callback_data=f"del_{t_id}")
-        ])
-
-    await message.answer("👇 Выберите студента для удаления:", reply_markup=inline_kb)
-
-@router.callback_query(F.data.startswith("del_"))
-async def admin_process_delete_callback(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("У вас нет прав.", show_alert=True)
-        return
-
-    target_id = int(callback.data.split("_")[1])
-
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", target_id)
-        if row:
-            await conn.execute("DELETE FROM students WHERE telegram_id = $1", target_id)
-            name = row['full_name']
-            await callback.message.edit_text(f"✅ Студент <b>{name}</b> успешно удален из базы.", parse_mode="HTML")
-        else:
-            await callback.answer("❌ Студент уже удален или не найден.", show_alert=True)
-    
-    await callback.answer()
-
-@router.message(F.text == "🚫 Блокировать ID")
-async def admin_start_ban(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await message.answer("Введите Telegram ID пользователя для <b>блокировки</b>:", parse_mode="HTML")
-    await state.set_state(RegStates.waiting_for_ban_id)
-
-@router.message(RegStates.waiting_for_ban_id)
-async def admin_process_ban(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
+    # ЭТАП 2, 3 и 4: Открытие, поиск группы и разбор с учетом объединений
     try:
-        target_id = int(message.text.strip())
-    except ValueError:
-        await message.answer("❌ Введите корректный ID (только цифры).")
-        return
+        def parse_excel():
+            wb = openpyxl.load_workbook(LOCAL_FILE_NAME, data_only=True)
+            if TARGET_SHEET not in wb.sheetnames:
+                raise Exception(f"Лист '{TARGET_SHEET}' не найден в файле.")
+            sheet = wb[TARGET_SHEET]
 
-    if target_id == ADMIN_ID:
-        await message.answer("❌ Вы не можете заблокировать самого себя.")
-        await state.clear()
-        return
+            group_col = None
+            for c in range(1, sheet.max_column + 1):
+                val = sheet.cell(row=14, column=c).value
+                if val and TARGET_GROUP in str(val):
+                    group_col = c
+                    break
 
-    async with db_pool.acquire() as conn:
-        await conn.execute("INSERT INTO banned_users (telegram_id) VALUES ($1) ON CONFLICT (telegram_id) DO NOTHING", target_id)
-        await conn.execute("DELETE FROM students WHERE telegram_id = $1", target_id)
-    
-    await state.clear()
-    await message.answer(f"✅ Пользователь <code>{target_id}</code> заблокирован.", parse_mode="HTML")
+            if group_col is None:
+                raise Exception(f"Колонка для группы {TARGET_GROUP} не найдена в строке 14.")
 
-@router.message(F.text == "✅ Разблокировать ID")
-async def admin_start_unban(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await message.answer("Введите Telegram ID пользователя для <b>разблокировки</b>:", parse_mode="HTML")
-    await state.set_state(RegStates.waiting_for_unban_id)
+            day_mapping = {
+                "понедельник": 0, "вторник": 1, "среда": 2, 
+                "четверг": 3, "пятница": 4, "суббота": 5, "воскресенье": 6
+            }
 
-@router.message(RegStates.waiting_for_unban_id)
-async def admin_process_unban(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    try:
-        target_id = int(message.text.strip())
-    except ValueError:
-        await message.answer("❌ Введите корректный ID (только цифры).")
-        return
+            parsed_lessons = []
+            current_day = None
+            current_time = None
 
-    async with db_pool.acquire() as conn:
-        await conn.execute("DELETE FROM banned_users WHERE telegram_id = $1", target_id)
-    
-    await state.clear()
-    await message.answer(f"✅ Пользователь <code>{target_id}</code> разблокирован.", parse_mode="HTML")
+            for r in range(15, sheet.max_row + 1):
+                d_val = get_real_cell_value(sheet, r, 1)
+                if d_val:
+                    d_str = str(d_val).strip().lower()
+                    for d_name, d_code in day_mapping.items():
+                        if d_name in d_str:
+                            current_day = d_code
+                            break
 
-@router.message(F.text == "⚙️ Изменить радиус зоны")
-async def admin_start_radius(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    current_r = await get_setting('radius', DEFAULT_RADIUS)
-    await message.answer(f"Текущий радиус: <b>{current_r}м</b>. Введите новый радиус в метрах:", parse_mode="HTML")
-    await state.set_state(RegStates.waiting_for_radius)
+                t_val = get_real_cell_value(sheet, r, 2)
+                if t_val:
+                    t_str = str(t_val).strip()
+                    if "-" in t_str or "–" in t_str:
+                        current_time = t_str.replace("–", "-")
 
-@router.message(RegStates.waiting_for_radius)
-async def admin_process_radius(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    try:
-        new_radius = int(message.text.strip())
-        if new_radius <= 0:
-            raise ValueError()
-    except ValueError:
-        await message.answer("❌ Введите корректное число.")
-        return
+                raw_val = get_real_cell_value(sheet, r, group_col)
 
-    await set_setting('radius', new_radius)
-    await state.clear()
-    await message.answer(f"✅ Новый радиус зоны: <b>{new_radius}м</b>", parse_mode="HTML")
+                if raw_val and current_day is not None and current_time:
+                    raw_text = str(raw_val).strip()
+                    if not raw_text or raw_text.lower() == "nan":
+                        continue
 
+                    time_clean = current_time.replace(".", ":")
+                    times = time_clean.split("-")
+                    t_start = times[0].strip() if len(times) > 0 else ""
+                    t_end = times[1].strip() if len(times) > 1 else ""
 
-# --- WEB-СЕРВЕР И TELEGRAM MINI APP DASHBOARD ---
-DASHBOARD_HTML = """
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Дашборд Посещаемости</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <style>
-        body { font-family: sans-serif; background: var(--tg-theme-bg-color, #f4f4f9); color: var(--tg-theme-text-color, #222); padding: 16px; margin: 0; }
-        .card { background: var(--tg-theme-secondary-bg-color, #fff); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .stat-num { font-size: 24px; font-weight: bold; color: var(--tg-theme-button-color, #0088cc); }
-        .status-badge { display: inline-block; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: bold; }
-        .active { background: #e3f8e0; color: #2e7d32; }
-        .inactive { background: #ffebee; color: #c62828; }
-        ul { list-style: none; padding: 0; margin: 8px 0 0 0; }
-        li { padding: 6px 0; border-bottom: 1px solid rgba(0,0,0,0.05); font-size: 14px; }
-    </style>
-</head>
-<body>
-    <h2>📊 Дашборд Посещаемости</h2>
-    <div class="card"><div style="display:flex; justify-content:space-between; align-items:center;"><span>Статус проверки:</span><span id="session-status" class="status-badge inactive">Завершена</span></div></div>
-    <div class="stat-grid">
-        <div class="card"><div>Всего студентов</div><div id="total-students" class="stat-num">0</div></div>
-        <div class="card"><div>Ответили сейчас</div><div id="responded-count" class="stat-num">0</div></div>
-    </div>
-    <div class="card"><h3>📍 Откликнулись:</h3><ul id="responses-list"><li><i>Список пуст</i></li></ul></div>
-    <script>
-        const tg = window.Telegram.WebApp; tg.expand();
-        async function loadStats() {
-            try {
-                const res = await fetch('/api/stats');
-                const data = await res.json();
-                document.getElementById('total-students').innerText = data.total_students;
-                document.getElementById('responded-count').innerText = data.responded_count;
-                const statusBadge = document.getElementById('session-status');
-                if (data.is_active) { statusBadge.innerText = '🟢 Активна'; statusBadge.className = 'status-badge active'; }
-                else { statusBadge.innerText = '🔴 Завершена'; statusBadge.className = 'status-badge inactive'; }
-                const list = document.getElementById('responses-list');
-                if (data.responses.length > 0) {
-                    list.innerHTML = data.responses.map(r => `<li><b>${r.name}</b> — ~${Math.round(r.dist)}м</li>`).join('');
-                } else { list.innerHTML = '<li><i>Список пуст</i></li>'; }
-            } catch (e) { console.error(e); }
-        }
-        loadStats(); setInterval(loadStats, 3000);
-    </script>
-</body>
-</html>
-"""
+                    subject, lesson_type, teacher, room = extract_lesson_details(raw_text)
 
-async def handle_index(request): 
-    return web.Response(text="Bot is running!")
+                    item = (current_day, t_start, t_end, subject, lesson_type, teacher, room)
+                    if item not in parsed_lessons:
+                        parsed_lessons.append(item)
 
-async def handle_dashboard(request): 
-    return web.Response(text=DASHBOARD_HTML, content_type='text/html')
+            return group_col, parsed_lessons
 
-async def handle_api_stats(request):
-    async with db_pool.acquire() as conn:
-        total = await conn.fetchval("SELECT COUNT(*) FROM students")
-        responses_data = []
-        for t_id, data in current_session["responses"].items():
-            row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", t_id)
-            name = row['full_name'] if row else f"ID: {t_id}"
-            responses_data.append({"name": name, "dist": data["dist"]})
-    return web.json_response({
-        "is_active": current_session["is_active"],
-        "total_students": total or 0,
-        "responded_count": len(current_session["responses"]),
-        "responses": responses_data
-    })
-
-async def start_web_server():
-    app = web.Application()
-    app.add_routes([
-        web.get('/', handle_index),
-        web.get('/dashboard', handle_dashboard),
-        web.get('/api/stats', handle_api_stats)
-    ])
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-
-
-# --- ЗАПУСК БОТА И СЕРВИСОВ ---
-async def main():
-    global db_pool
-    print("Подключение к базе данных Supabase PostgreSQL...")
-    db_pool = await asyncpg.create_pool(
-        dsn=DATABASE_URL,
-        statement_cache_size=0
-    )
-    
-    await init_db()
-    print("База данных и расписание инициализированы.")
-
-    bot = Bot(token=TOKEN)
-    dp = Dispatcher()
-    dp.include_router(router)
-    
-    await bot.delete_webhook(drop_pending_updates=True)
-
-    # Устанавливаем постоянную кнопку Mini App слева от поля ввода текста
-    await bot.set_chat_menu_button(
-        menu_button=MenuButtonWebApp(
-            text="📊 Дашборд",
-            web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard")
-        )
-    )
-    
-    print("Запуск веб-сервера, бота и фоновой рассылки...")
-    await asyncio.gather(
-        start_web_server(),
-        dp.start_polling(bot),
-        schedule_notifications_loop(bot)
-    )
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        await status_msg.edit_text("⏳ <b>[3/5]</b> Поиск группы Б-ИТЗД 26/23 Р и разрешение объединенных ячеек...", parse_mode="HTML")
+        group_col_idx, parsed_lessons = await asyncio.to_thread(parse_excel)
+        
+        await status_msg.edit_text(
+            f"✅ <b>[4/5]</b> Извлечение предметов завершено! Найдено
