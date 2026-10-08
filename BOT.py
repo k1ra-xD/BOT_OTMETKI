@@ -5,7 +5,7 @@ import asyncpg
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 
-from config import TOKEN, DATABASE_URL, ASTANA_TZ
+from config import TOKEN, DATABASE_URL, ASTANA_TZ, ADMIN_ID
 from db import init_db
 from handlers import router, set_db_pool, get_db_pool, current_session
 from web import create_web_app
@@ -23,9 +23,16 @@ async def schedule_notifications_loop(bot: Bot):
             pool = get_db_pool()
             if pool:
                 async with pool.acquire() as conn:
-                    lessons = await conn.fetch("SELECT * FROM schedule WHERE day_of_week = $1 AND time_start = $2", current_day, target_time)
+                    lessons = await conn.fetch(
+                        "SELECT * FROM schedule WHERE day_of_week = $1 AND time_start = $2", 
+                        current_day, target_time
+                    )
                     if lessons:
                         students = await conn.fetch("SELECT telegram_id FROM students")
+                        recipients = {s['telegram_id'] for s in students}
+                        if ADMIN_ID:
+                            recipients.add(ADMIN_ID)
+
                         for lesson in lessons:
                             lesson_id_key = f"{date_key}_{lesson['id']}"
                             if lesson_id_key not in notified_lessons:
@@ -37,10 +44,11 @@ async def schedule_notifications_loop(bot: Bot):
                                     f"👨‍🏫 <b>Преподаватель:</b> {lesson['teacher']}\n"
                                     f"🚪 <b>Аудитория:</b> {lesson['room']}"
                                 )
-                                for student in students:
+                                for user_id in recipients:
                                     try:
-                                        await bot.send_message(student['telegram_id'], text, parse_mode="HTML")
-                                    except Exception: pass
+                                        await bot.send_message(user_id, text, parse_mode="HTML")
+                                    except Exception:
+                                        pass
         except Exception as e:
             print(f"Ошибка в рассылке: {e}")
         await asyncio.sleep(30)
