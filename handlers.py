@@ -476,9 +476,9 @@ async def admin_process_radius(message: Message, state: FSMContext):
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext, bot: Bot):  # <-- Добавили bot: Bot
+async def cmd_start(message: Message, state: FSMContext, bot: Bot):  # <-- Обязательно добавьте bot: Bot
     if message.from_user.id == ADMIN_ID:
-        # Включаем WebApp кнопку снизу ТОЛЬКО для вас (админа)
+        # Устанавливаем WebApp кнопку слева от поля ввода ТОЛЬКО для вас
         await bot.set_chat_menu_button(
             chat_id=message.chat.id,
             menu_button=MenuButtonWebApp(
@@ -487,12 +487,13 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):  # <-- До�
             )
         )
         
-        # ... дальше ваш текущий код для админа ...
+        # ... дальше ваш существующий код для админа ...
         pool = get_db_pool()
+        radius = await get_setting(pool, 'radius', DEFAULT_RADIUS)
         # ...
         return
 
-    # Для ВСЕХ остальных пользователей (студентов) отключаем WebApp кнопку
+    # Для ВСЕХ остальных (студентов) сбрасываем WebApp кнопку
     await bot.set_chat_menu_button(
         chat_id=message.chat.id,
         menu_button=MenuButtonDefault()
