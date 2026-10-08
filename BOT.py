@@ -371,11 +371,7 @@ async def update_schedule_workflow(status_msg: Message):
     
     # ЭТАП 1: Скачивание файла с сайта
     try:
-        await status_msg.edit_text(
-    f"✅ <b>[4/5]</b> Извлечение предметов завершено! Найдено пар: <b>{len(parsed_lessons)}</b>.\n"
-    f"⏳ <b>[5/5]</b> Сохранение расписания в Supabase...", 
-    parse_mode="HTML"
-)
+        await status_msg.edit_text("⏳ <b>[1/5]</b> Подключение к <code>esil.edu.kz</code> и поиск файла...", parse_mode="HTML")
         
         def download_file():
             res = requests.get(SCHEDULE_PAGE_URL, headers=headers, timeout=30)
@@ -470,5 +466,576 @@ async def update_schedule_workflow(status_msg: Message):
         await status_msg.edit_text("⏳ <b>[3/5]</b> Поиск группы Б-ИТЗД 26/23 Р и разрешение объединенных ячеек...", parse_mode="HTML")
         group_col_idx, parsed_lessons = await asyncio.to_thread(parse_excel)
         
-        await status_msg.edit_text(
-            f"✅ <b>[4/5]</b> Извлечение предметов завершено! Найдено
+        step4_text = (
+            f"✅ <b>[4/5]</b> Извлечение предметов завершено! Найдено пар: <b>{len(parsed_lessons)}</b>.\n"
+            f"⏳ <b>[5/5]</b> Сохранение расписания в Supabase..."
+        )
+        await status_msg.edit_text(step4_text, parse_mode="HTML")
+    except Exception as e:
+        await status_msg.edit_text(f"❌ <b>Ошибка при разборе Excel:</b> {e}", parse_mode="HTML")
+        return
+
+    # ЭТАП 5: Очистка таблицы и запись новых данных в Supabase
+    try:
+        async with db_pool.acquire() as conn:
+            await conn.execute("TRUNCATE TABLE schedule")
+            for item in parsed_lessons:
+                await conn.execute("""
+                    INSERT INTO schedule (day_of_week, time_start, time_end, subject, lesson_type, teacher, room)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """, *item)
+
+        summary = f"🎉 <b>Расписание успешно обновлено в Supabase!</b>\n\n"
+        summary += f"👥 <b>Группа:</b> <code>{TARGET_GROUP}</code>\n"
+        summary += f"📊 <b>Всего предметов:</b> {len(parsed_lessons)}\n\n"
+
+        by_day = {}
+        for l in parsed_lessons:
+            by_day.setdefault(l[0], []).append(l)
+
+        for day_code in sorted(by_day.keys()):
+            day_name = DAYS_MAP.get(day_code, "")
+            summary += f"• <b>{day_name}:</b> {len(by_day[day_code])} пар(ы)\n"
+
+        await status_msg.edit_text(summary, parse_mode="HTML")
+    except Exception as e:
+        await status_msg.edit_text(f"❌ <b>Ошибка записи в БД:</b> {e}", parse_mode="HTML")
+
+
+@router.callback_query(F.data == "admin_auto_update_schedule")
+async def start_auto_schedule_update(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return await callback.answer("У вас нет прав.", show_alert=True)
+        
+    await callback.answer()
+    status_msg = await callback.message.answer("🚀 <b>Начинаю процесс обновления расписания...</b>", parse_mode="HTML")
+    asyncio.create_task(update_schedule_workflow(status_msg))
+
+
+@router.callback_query(F.data == "admin_edit_schedule")
+async def start_schedule_edit(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return await callback.answer("У вас нет прав.", show_alert=True)
+        
+    await state.set_state(ScheduleAdminStates.waiting_for_schedule_text)
+    await callback.message.answer(
+        "📝 <b>Отправьте новое расписание текстом в формате:</b>\n\n"
+        "<code>Понедельник\n"
+        "10.00-10.50 Предмет, лекция, Преподаватель ауд 211\n"
+        "11.00-11.50 Предмет, семинар, Преподаватель ауд 212</code>\n\n"
+        "Для отмены отправьте /cancel",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.message(ScheduleAdminStates.waiting_for_schedule_text)
+async def process_new_schedule_text(message: Message, state: FSMContext):
+    if message.text == "/cancel":
+        await state.clear()
+        return await message.answer("Обновление расписания отменено.")
+    
+    lines = message.text.strip().split("\n")
+    current_day = None
+    parsed_items = []
+    
+    day_mapping = {
+        "понедельник": 0, "вторник": 1, "среда": 2, 
+        "четверг": 3, "пятница": 4, "суббота": 5, "воскресенье": 6
+    }
+
+    try:
+        for line in lines:
+            line_clean = line.strip()
+            if not line_clean:
+                continue
+            
+            if line_clean.lower() in day_mapping:
+                current_day = day_mapping[line_clean.lower()]
+                continue
+                
+            if current_day is not None and "-" in line_clean:
+                parts = line_clean.split(" ", 1)
+                times = parts[0].replace(".", ":").split("-")
+                t_start, t_end = times[0], times[1]
+                details = parts[1] if len(parts) > 1 else ""
+                
+                room = "не указана"
+                if "ауд" in details.lower():
+                    details_split = details.lower().split("ауд")
+                    room = "ауд " + details_split[1].strip(" .")
+                    details = details[:details.lower().find("ауд")]
+                elif "онлайн" in details.lower():
+                    room = "Онлайн"
+
+                parsed_items.append((current_day, t_start, t_end, details.strip(", "), "занятие", "не указан", room))
+
+        if not parsed_items:
+            return await message.answer("⚠️ Не удалось распознать формат. Попробуйте еще раз или нажмите /cancel.")
+
+        async with db_pool.acquire() as conn:
+            await conn.execute("TRUNCATE TABLE schedule")
+            for item in parsed_items:
+                await conn.execute("""
+                    INSERT INTO schedule (day_of_week, time_start, time_end, subject, lesson_type, teacher, room)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """, *item)
+
+        await state.clear()
+        await message.answer("✅ <b>Расписание успешно обновлено в Supabase!</b>", parse_mode="HTML")
+
+    except Exception as e:
+        await message.answer(f"❌ Ошибка разбора: {e}")
+
+
+# --- ЭКСПРЕСС-ПРОВЕРКА И ГЕОПОЗИЦИЯ ---
+@router.message(F.text == "🟢 Проверить присутствие")
+async def cmd_start_check(message: Message, bot: Bot):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    current_session["is_active"] = True
+    current_session["responses"].clear()
+    
+    geo_kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📍 Я в ВУЗе (Отправить гео)", request_location=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+    async with db_pool.acquire() as conn:
+        students = await conn.fetch("SELECT telegram_id FROM students")
+
+    count = 0
+    for row in students:
+        t_id = row['telegram_id']
+        try:
+            await bot.send_message(
+                t_id, 
+                "⚠️ <b>Проверка присутствия!</b>\n"
+                "Пожалуйста, нажмите кнопку ниже и подтвердите нахождение на территории ВУЗа:", 
+                reply_markup=geo_kb,
+                parse_mode="HTML"
+            )
+            count += 1
+        except Exception:
+            pass  
+
+    await message.answer(
+        f"🚀 <b>Проверка запущена!</b>\n"
+        f"Запросы отправлены студентам ({count} чел.).\n\n"
+        f"Используйте кнопку «👀 Кто ответил» для наблюдения или «🔴 Завершить проверку» для получения отчета.",
+        parse_mode="HTML"
+    )
+
+@router.message(F.text == "📍 Отметиться")
+async def student_manual_checkin(message: Message):
+    if not current_session["is_active"]:
+        return await message.answer("Сейчас нет активной проверки присутствия.")
+    
+    geo_kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📍 Я в ВУЗе (Отправить гео)", request_location=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer("Нажмите кнопку ниже для отправки геопозиции:", reply_markup=geo_kb)
+
+@router.message(F.location)
+async def handle_location(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state == RegStates.waiting_for_uni_location.state:
+        if message.from_user.id != ADMIN_ID:
+            return
+        
+        new_lat = message.location.latitude
+        new_lon = message.location.longitude
+        await set_setting('lat', new_lat)
+        await set_setting('lon', new_lon)
+        
+        await state.clear()
+        await message.answer(
+            f"✅ <b>Новые координаты ВУЗа сохранены!</b>\n"
+            f"Широта: <code>{new_lat}</code>\nДолгота: <code>{new_lon}</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    if not current_session["is_active"]:
+        await message.answer("Сейчас нет активной проверки присутствия.", reply_markup=ReplyKeyboardRemove())
+        return
+
+    if message.from_user.id in current_session["responses"]:
+        await message.answer("⚠️ Вы уже отправили свою геопозицию для этой проверки.", reply_markup=ReplyKeyboardRemove())
+        return
+
+    accuracy = getattr(message.location, 'horizontal_accuracy', None)
+    if accuracy and accuracy > 200:
+        await message.answer(
+            f"⚠️ Высокая погрешность GPS (~{int(accuracy)}м).\n"
+            "Подойдите ближе к окну, включите Wi-Fi для точности и отправьте геопозицию снова."
+        )
+        return
+
+    lat = message.location.latitude
+    lon = message.location.longitude
+    
+    uni_lat = await get_setting('lat', DEFAULT_UNI_LAT)
+    uni_lon = await get_setting('lon', DEFAULT_UNI_LON)
+    
+    dist = calculate_distance(uni_lat, uni_lon, lat, lon)
+    current_session["responses"][message.from_user.id] = {
+        "lat": lat, "lon": lon, "dist": dist
+    }
+
+    await message.answer(f"✅ Геопозиция принята! Расстояние до корпуса: ~{int(dist)}м.", reply_markup=student_main_kb)
+
+
+# --- МОНИТОРИНГ И ИТОГОВЫЙ ОТЧЕТ ---
+@router.message(F.text == "👀 Кто ответил")
+async def cmd_who_responded(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    if not current_session["is_active"]:
+        await message.answer("Проверка присутствия сейчас не проводится.")
+        return
+
+    responses = current_session["responses"]
+    if not responses:
+        await message.answer("Пока ни один студент не прислал геопозицию.")
+        return
+
+    text = f"⏳ <b>Ответили на проверку ({len(responses)} чел.):</b>\n\n"
+    async with db_pool.acquire() as conn:
+        for idx, (t_id, data) in enumerate(responses.items(), 1):
+            row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", t_id)
+            name = row['full_name'] if row else "Неизвестный"
+            text += f"{idx}. {name} — ~{int(data['dist'])}м\n"
+        
+    await message.answer(text, parse_mode="HTML")
+
+@router.message(F.text == "🔴 Завершить проверку")
+async def cmd_stop_check(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    if not current_session["is_active"]:
+        await message.answer("Нет активной проверки для завершения.")
+        return
+
+    current_session["is_active"] = False
+    responses = current_session["responses"]
+    
+    radius = await get_setting('radius', DEFAULT_RADIUS)
+    uni_lat = await get_setting('lat', DEFAULT_UNI_LAT)
+    uni_lon = await get_setting('lon', DEFAULT_UNI_LON)
+
+    async with db_pool.acquire() as conn:
+        all_students = await conn.fetch("SELECT telegram_id, full_name FROM students")
+
+    if not all_students:
+        await message.answer("📋 Список зарегистрированных студентов пуст.")
+        return
+
+    report = f"📊 <b>Отчет присутствия в ВУЗе:</b>\n"
+    report += f"📍 Зона: {radius}м от (<code>{uni_lat:.4f}, {uni_lon:.4f}</code>)\n\n"
+
+    in_count = 0
+    out_count = 0
+    no_resp_count = 0
+
+    for idx, row in enumerate(all_students, 1):
+        t_id = row['telegram_id']
+        name = row['full_name']
+        if t_id in responses:
+            dist = responses[t_id]["dist"]
+            if dist <= radius:
+                report += f"{idx}. ✅ <b>{name}</b> — В ВУЗе (~{int(dist)}м)\n"
+                in_count += 1
+            else:
+                report += f"{idx}. ❌ <b>{name}</b> — Вне зоны ({int(dist)}м)\n"
+                out_count += 1
+        else:
+            report += f"{idx}. ⚙️ <b>{name}</b> — Не ответил\n"
+            no_resp_count += 1
+
+    report += f"\n📈 <b>Итого:</b> В ВУЗе: {in_count} | Вне зоны: {out_count} | Проигнорировали: {no_resp_count}"
+    await message.answer(report, parse_mode="HTML")
+
+
+# --- НАСТРОЙКИ АДМИНИСТРАТОРА ---
+@router.message(F.text == "🎯 Установить центр ВУЗа")
+async def admin_set_uni_start(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📍 Отправить текущие координаты", request_location=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer("Отправьте вашу геопозицию. Она станет новым центром ВУЗа:", reply_markup=kb)
+    await state.set_state(RegStates.waiting_for_uni_location)
+
+@router.message(F.text == "👥 Список студентов")
+async def admin_list_students(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT telegram_id, full_name FROM students")
+        banned_rows = await conn.fetch("SELECT telegram_id FROM banned_users")
+
+    banned_ids = [r['telegram_id'] for r in banned_rows]
+
+    if not rows:
+        await message.answer("📁 База студентов пуста.")
+        return
+
+    text = f"📋 <b>Зарегистрированные студенты ({len(rows)}):</b>\n\n"
+    for idx, row in enumerate(rows, 1):
+        t_id = row['telegram_id']
+        name = row['full_name']
+        status = " (🚫 Забанен)" if t_id in banned_ids else ""
+        text += f"{idx}. {name} (ID: <code>{t_id}</code>){status}\n"
+    
+    await message.answer(text, parse_mode="HTML")
+
+@router.message(F.text == "🗑 Удалить студента")
+async def admin_start_delete(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT telegram_id, full_name FROM students")
+
+    if not rows:
+        await message.answer("📁 База студентов пуста, некого удалять.")
+        return
+
+    inline_kb = InlineKeyboardMarkup(inline_keyboard=[])
+    for row in rows:
+        t_id = row['telegram_id']
+        name = row['full_name']
+        inline_kb.inline_keyboard.append([
+            InlineKeyboardButton(text=f"❌ {name}", callback_data=f"del_{t_id}")
+        ])
+
+    await message.answer("👇 Выберите студента для удаления:", reply_markup=inline_kb)
+
+@router.callback_query(F.data.startswith("del_"))
+async def admin_process_delete_callback(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("У вас нет прав.", show_alert=True)
+        return
+
+    target_id = int(callback.data.split("_")[1])
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", target_id)
+        if row:
+            await conn.execute("DELETE FROM students WHERE telegram_id = $1", target_id)
+            name = row['full_name']
+            await callback.message.edit_text(f"✅ Студент <b>{name}</b> успешно удален из базы.", parse_mode="HTML")
+        else:
+            await callback.answer("❌ Студент уже удален или не найден.", show_alert=True)
+    
+    await callback.answer()
+
+@router.message(F.text == "🚫 Блокировать ID")
+async def admin_start_ban(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer("Введите Telegram ID пользователя для <b>блокировки</b>:", parse_mode="HTML")
+    await state.set_state(RegStates.waiting_for_ban_id)
+
+@router.message(RegStates.waiting_for_ban_id)
+async def admin_process_ban(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        target_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Введите корректный ID (только цифры).")
+        return
+
+    if target_id == ADMIN_ID:
+        await message.answer("❌ Вы не можете заблокировать самого себя.")
+        await state.clear()
+        return
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("INSERT INTO banned_users (telegram_id) VALUES ($1) ON CONFLICT (telegram_id) DO NOTHING", target_id)
+        await conn.execute("DELETE FROM students WHERE telegram_id = $1", target_id)
+    
+    await state.clear()
+    await message.answer(f"✅ Пользователь <code>{target_id}</code> заблокирован.", parse_mode="HTML")
+
+@router.message(F.text == "✅ Разблокировать ID")
+async def admin_start_unban(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer("Введите Telegram ID пользователя для <b>разблокировки</b>:", parse_mode="HTML")
+    await state.set_state(RegStates.waiting_for_unban_id)
+
+@router.message(RegStates.waiting_for_unban_id)
+async def admin_process_unban(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        target_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Введите корректный ID (только цифры).")
+        return
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM banned_users WHERE telegram_id = $1", target_id)
+    
+    await state.clear()
+    await message.answer(f"✅ Пользователь <code>{target_id}</code> разблокирован.", parse_mode="HTML")
+
+@router.message(F.text == "⚙️ Изменить радиус зоны")
+async def admin_start_radius(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    current_r = await get_setting('radius', DEFAULT_RADIUS)
+    await message.answer(f"Текущий радиус: <b>{current_r}м</b>. Введите новый радиус в метрах:", parse_mode="HTML")
+    await state.set_state(RegStates.waiting_for_radius)
+
+@router.message(RegStates.waiting_for_radius)
+async def admin_process_radius(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        new_radius = int(message.text.strip())
+        if new_radius <= 0:
+            raise ValueError()
+    except ValueError:
+        await message.answer("❌ Введите корректное число.")
+        return
+
+    await set_setting('radius', new_radius)
+    await state.clear()
+    await message.answer(f"✅ Новый радиус зоны: <b>{new_radius}м</b>", parse_mode="HTML")
+
+
+# --- WEB-СЕРВЕР И TELEGRAM MINI APP DASHBOARD ---
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Дашборд Посещаемости</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; background: var(--tg-theme-bg-color, #f4f4f9); color: var(--tg-theme-text-color, #222); padding: 16px; margin: 0; }
+        .card { background: var(--tg-theme-secondary-bg-color, #fff); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .stat-num { font-size: 24px; font-weight: bold; color: var(--tg-theme-button-color, #0088cc); }
+        .status-badge { display: inline-block; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: bold; }
+        .active { background: #e3f8e0; color: #2e7d32; }
+        .inactive { background: #ffebee; color: #c62828; }
+        ul { list-style: none; padding: 0; margin: 8px 0 0 0; }
+        li { padding: 6px 0; border-bottom: 1px solid rgba(0,0,0,0.05); font-size: 14px; }
+    </style>
+</head>
+<body>
+    <h2>📊 Дашборд Посещаемости</h2>
+    <div class="card"><div style="display:flex; justify-content:space-between; align-items:center;"><span>Статус проверки:</span><span id="session-status" class="status-badge inactive">Завершена</span></div></div>
+    <div class="stat-grid">
+        <div class="card"><div>Всего студентов</div><div id="total-students" class="stat-num">0</div></div>
+        <div class="card"><div>Ответили сейчас</div><div id="responded-count" class="stat-num">0</div></div>
+    </div>
+    <div class="card"><h3>📍 Откликнулись:</h3><ul id="responses-list"><li><i>Список пуст</i></li></ul></div>
+    <script>
+        const tg = window.Telegram.WebApp; tg.expand();
+        async function loadStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                document.getElementById('total-students').innerText = data.total_students;
+                document.getElementById('responded-count').innerText = data.responded_count;
+                const statusBadge = document.getElementById('session-status');
+                if (data.is_active) { 
+                    statusBadge.innerText = 'Активна'; 
+                    statusBadge.className = 'status-badge active'; 
+                } else { 
+                    statusBadge.innerText = 'Завершена'; 
+                    statusBadge.className = 'status-badge inactive'; 
+                }
+                const list = document.getElementById('responses-list');
+                list.innerHTML = '';
+                if (data.responses && data.responses.length > 0) {
+                    data.responses.forEach(r => {
+                        const li = document.createElement('li');
+                        li.innerText = `${r.name} — ~${Math.round(r.dist)}м`;
+                        list.appendChild(li);
+                    });
+                } else {
+                    list.innerHTML = '<li><i>Список пуст</i></li>';
+                }
+            } catch(e) { console.error(e); }
+        }
+        loadStats();
+        setInterval(loadStats, 3000);
+    </script>
+</body>
+</html>
+"""
+
+async def handle_dashboard(request):
+    return web.Response(text=DASHBOARD_HTML, content_type='text/html')
+
+async def handle_api_stats(request):
+    async with db_pool.acquire() as conn:
+        total_students = await conn.fetchval("SELECT COUNT(*) FROM students")
+        
+    responses_data = []
+    async with db_pool.acquire() as conn:
+        for t_id, d in current_session["responses"].items():
+            row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", t_id)
+            name = row['full_name'] if row else "Неизвестный"
+            responses_data.append({"name": name, "dist": d["dist"]})
+            
+    return web.json_response({
+        "is_active": current_session["is_active"],
+        "total_students": total_students or 0,
+        "responded_count": len(current_session["responses"]),
+        "responses": responses_data
+    })
+
+
+# --- ЗАПУСК БОТА И ВЕБ-СЕРВЕРА ---
+async def main():
+    global db_pool
+    print("🚀 Запуск бота...")
+    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    await init_db()
+
+    bot = Bot(token=TOKEN)
+    dp = Dispatcher()
+    dp.include_router(router)
+
+    # Фоновая рассылка напоминаний за 10 минут
+    asyncio.create_task(schedule_notifications_loop(bot))
+
+    # Настройка WebApp сервера
+    app = web.Application()
+    app.router.add_get('/dashboard', handle_dashboard)
+    app.router.add_get('/api/stats', handle_api_stats)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"🌐 WebApp запущен на порту {port}")
+
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
