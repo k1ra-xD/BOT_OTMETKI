@@ -52,7 +52,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-# Middleware
+# Middleware проверки бана
 class BannedMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: Message, data):
         user = data.get("event_from_user")
@@ -67,7 +67,7 @@ class BannedMiddleware(BaseMiddleware):
 
 router.message.middleware(BannedMiddleware())
 
-# Клавиатуры
+# Клавиатуры ДЛЯ СТУДЕНТОВ (обычные кнопки, БЕЗ WebApp)
 student_main_kb = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="📅 Расписание"), KeyboardButton(text="📍 Отметиться")]],
     resize_keyboard=True
@@ -84,6 +84,7 @@ schedule_inline_kb = InlineKeyboardMarkup(inline_keyboard=[
 # Команда /start
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
+    # Раздел только для Администратора (здесь есть WebApp Дашборд)
     if message.from_user.id == ADMIN_ID:
         pool = get_db_pool()
         radius = await get_setting(pool, 'radius', DEFAULT_RADIUS)
@@ -117,6 +118,7 @@ async def cmd_start(message: Message, state: FSMContext):
         await message.answer("Управление расписанием и статистикой:", reply_markup=admin_inline_panel)
         return
 
+    # Раздел для Студентов (ТОЛЬКО обычное меню)
     async with get_db_pool().acquire() as conn:
         row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", message.from_user.id)
 
@@ -180,7 +182,7 @@ async def process_schedule_callback(callback: CallbackQuery):
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=schedule_inline_kb)
     await callback.answer()
 
-# Авто-обновление расписания
+# Авто-обновление расписания (только админ)
 async def update_schedule_workflow(status_msg: Message):
     try:
         await status_msg.edit_text("⏳ <b>[1/5]</b> Подключение к <code>esil.edu.kz</code> и поиск файла...", parse_mode="HTML")
