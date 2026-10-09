@@ -1,5 +1,6 @@
 import math
 import asyncio
+import logging
 from datetime import datetime
 from aiogram import Bot, Router, F, BaseMiddleware
 from aiogram.filters import Command
@@ -9,11 +10,10 @@ from aiogram.types import (
     Message, CallbackQuery, 
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardRemove, WebAppInfo
+    ReplyKeyboardRemove, WebAppInfo,
+    MenuButtonDefault, MenuButtonWebApp
 )
 
-from aiogram import Bot
-from aiogram.types import MenuButtonDefault, MenuButtonWebApp, WebAppInfo
 from config import ADMIN_ID, DEFAULT_RADIUS, DEFAULT_UNI_LAT, DEFAULT_UNI_LON, DAYS_MAP, ASTANA_TZ, TARGET_GROUP
 from db import get_setting, set_setting
 from parser import download_schedule_file, parse_excel_schedule
@@ -30,11 +30,6 @@ class RegStates(StatesGroup):
 class ScheduleAdminStates(StatesGroup):
     waiting_for_schedule_text = State()
 
-current_session = {
-    "is_active": False,
-    "responses": {}
-}
-
 db_pool_ref = None
 
 def set_db_pool(pool):
@@ -43,6 +38,11 @@ def set_db_pool(pool):
 
 def get_db_pool():
     return db_pool_ref
+
+def parse_time_to_minutes(time_str: str) -> int:
+    clean_str = time_str.replace('.', ':').strip()
+    parts = clean_str.split(':')
+    return int(parts[0]) * 60 + int(parts[1])
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     R = 6371000   
@@ -69,9 +69,14 @@ class BannedMiddleware(BaseMiddleware):
 
 router.message.middleware(BannedMiddleware())
 
-# Клавиатуры ДЛЯ СТУДЕНТОВ (обычные кнопки, БЕЗ WebApp)
+# Клавиатура СТУДЕНТА
 student_main_kb = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text="📅 Расписание"), KeyboardButton(text="📍 Отметиться")]],
+    keyboard=[
+        [
+            KeyboardButton(text="📅 Расписание"), 
+            KeyboardButton(text="📍 Я здесь", request_location=True)
+        ]
+    ],
     resize_keyboard=True
 )
 
@@ -85,8 +90,25 @@ schedule_inline_kb = InlineKeyboardMarkup(inline_keyboard=[
 
 # Команда /start
 @router.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext):
-    # Раздел только для Администратора (здесь есть WebApp Дашборд)
+async def cmd_start(message: Message, state: FSMContext, bot: Bot):
+    try:
+        if message.from_user.id == ADMIN_ID:
+            await bot.set_chat_menu_button(
+                chat_id=message.chat.id,
+                menu_button=MenuButtonWebApp(
+                    text="📊 Дашборд",
+                    web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard")
+                )
+            )
+        else:
+            await bot.set_chat_menu_button(
+                chat_id=message.chat.id,
+                menu_button=MenuButtonDefault()
+            )
+    except Exception as e:
+        logging.error(f"Ошибка меню кнопки: {e}")
+
+    # Очищенная панель Администратора
     if message.from_user.id == ADMIN_ID:
         pool = get_db_pool()
         radius = await get_setting(pool, 'radius', DEFAULT_RADIUS)
@@ -95,11 +117,10 @@ async def cmd_start(message: Message, state: FSMContext):
         
         admin_kb = ReplyKeyboardMarkup(
             keyboard=[
-                [KeyboardButton(text="🟢 Проверить присутствие"), KeyboardButton(text="🔴 Завершить проверку")],
-                [KeyboardButton(text="👀 Кто ответил"), KeyboardButton(text="🎯 Установить центр ВУЗа")],
+                [KeyboardButton(text="🎯 Установить центр ВУЗа"), KeyboardButton(text="⚙️ Изменить радиус зоны")],
                 [KeyboardButton(text="👥 Список студентов"), KeyboardButton(text="🗑 Удалить студента")],
                 [KeyboardButton(text="🚫 Блокировать ID"), KeyboardButton(text="✅ Разблокировать ID")],
-                [KeyboardButton(text="⚙️ Изменить радиус зоны"), KeyboardButton(text="📅 Расписание")]
+                [KeyboardButton(text="📅 Расписание")]
             ],
             resize_keyboard=True
         )
@@ -120,7 +141,7 @@ async def cmd_start(message: Message, state: FSMContext):
         await message.answer("Управление расписанием и статистикой:", reply_markup=admin_inline_panel)
         return
 
-    # Раздел для Студентов (ТОЛЬКО обычное меню)
+    # Раздел для Студентов
     async with get_db_pool().acquire() as conn:
         row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", message.from_user.id)
 
@@ -184,7 +205,7 @@ async def process_schedule_callback(callback: CallbackQuery):
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=schedule_inline_kb)
     await callback.answer()
 
-# Авто-обновление расписания (только админ)
+# Авто-обновление расписания
 async def update_schedule_workflow(status_msg: Message):
     try:
         await status_msg.edit_text("⏳ <b>[1/5]</b> Подключение к <code>esil.edu.kz</code> и поиск файла...", parse_mode="HTML")
@@ -301,32 +322,7 @@ async def process_new_schedule_text(message: Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
-# Проверка присутствия и Геопозиция
-@router.message(F.text == "🟢 Проверить присутствие")
-async def cmd_start_check(message: Message, bot: Bot):
-    if message.from_user.id != ADMIN_ID: return
-    current_session["is_active"] = True
-    current_session["responses"].clear()
-    
-    geo_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📍 Я в ВУЗе (Отправить гео)", request_location=True)]], resize_keyboard=True, one_time_keyboard=True)
-    async with get_db_pool().acquire() as conn:
-        students = await conn.fetch("SELECT telegram_id FROM students")
-
-    count = 0
-    for row in students:
-        try:
-            await bot.send_message(row['telegram_id'], "⚠️ <b>Проверка присутствия!</b>\nОтправьте геопозицию:", reply_markup=geo_kb, parse_mode="HTML")
-            count += 1
-        except Exception: pass
-
-    await message.answer(f"🚀 <b>Проверка запущена!</b> Запросы отправлены ({count} чел.).", parse_mode="HTML")
-
-@router.message(F.text == "📍 Отметиться")
-async def student_manual_checkin(message: Message):
-    if not current_session["is_active"]: return await message.answer("Сейчас нет активной проверки.")
-    geo_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📍 Я в ВУЗе (Отправить гео)", request_location=True)]], resize_keyboard=True, one_time_keyboard=True)
-    await message.answer("Отправьте геопозицию:", reply_markup=geo_kb)
-
+# Обработка геопозиции от студентов и смена координат ВУЗа
 @router.message(F.location)
 async def handle_location(message: Message, state: FSMContext):
     current_state = await state.get_state()
@@ -339,55 +335,81 @@ async def handle_location(message: Message, state: FSMContext):
         await state.clear()
         return await message.answer("✅ Координаты ВУЗа сохранены!", parse_mode="HTML")
 
-    if not current_session["is_active"]:
-        return await message.answer("Сейчас нет активной проверки.", reply_markup=ReplyKeyboardRemove())
-
-    if message.from_user.id in current_session["responses"]:
-        return await message.answer("⚠️ Вы уже отправляли геопозицию.", reply_markup=ReplyKeyboardRemove())
-
     lat, lon = message.location.latitude, message.location.longitude
     uni_lat = await get_setting(pool, 'lat', DEFAULT_UNI_LAT)
     uni_lon = await get_setting(pool, 'lon', DEFAULT_UNI_LON)
-    dist = calculate_distance(uni_lat, uni_lon, lat, lon)
-
-    current_session["responses"][message.from_user.id] = {"lat": lat, "lon": lon, "dist": dist}
-    await message.answer(f"✅ Геопозиция принята! Расстояние: ~{int(dist)}м.", reply_markup=student_main_kb)
-
-@router.message(F.text == "👀 Кто ответил")
-async def cmd_who_responded(message: Message):
-    if message.from_user.id != ADMIN_ID or not current_session["is_active"]: return
-    responses = current_session["responses"]
-    if not responses: return await message.answer("Пока никто не прислал геопозицию.")
-    
-    text = f"⏳ <b>Ответили ({len(responses)} чел.):</b>\n\n"
-    async with get_db_pool().acquire() as conn:
-        for idx, (t_id, data) in enumerate(responses.items(), 1):
-            row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", t_id)
-            name = row['full_name'] if row else "Неизвестный"
-            text += f"{idx}. {name} — ~{int(data['dist'])}м\n"
-    await message.answer(text, parse_mode="HTML")
-
-@router.message(F.text == "🔴 Завершить проверку")
-async def cmd_stop_check(message: Message):
-    if message.from_user.id != ADMIN_ID or not current_session["is_active"]: return
-    current_session["is_active"] = False
-    responses = current_session["responses"]
-    pool = get_db_pool()
     radius = await get_setting(pool, 'radius', DEFAULT_RADIUS)
+    
+    dist = calculate_distance(uni_lat, uni_lon, lat, lon)
+    is_inside = dist <= radius
+
+    if not is_inside:
+        return await message.answer(
+            f"❌ <b>Вы вне зоны ВУЗа!</b>\n"
+            f"Расстояние до ВУЗа: ~<b>{int(dist)}м</b> (допустимо: {radius}м).\n"
+            f"Отметка не засчитана.",
+            parse_mode="HTML",
+            reply_markup=student_main_kb
+        )
+
+    now = datetime.now(ASTANA_TZ)
+    now_minutes = now.hour * 60 + now.minute
+    day_code = now.weekday()
 
     async with pool.acquire() as conn:
-        all_students = await conn.fetch("SELECT telegram_id, full_name FROM students")
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS attendance (
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT,
+                subject TEXT,
+                checkin_time TIMESTAMP,
+                status TEXT,
+                distance INT
+            );
+        """)
 
-    report = f"📊 <b>Отчет присутствия:</b>\n\n"
-    for idx, row in enumerate(all_students, 1):
-        t_id, name = row['telegram_id'], row['full_name']
-        if t_id in responses:
-            dist = responses[t_id]["dist"]
-            st = "✅ В ВУЗе" if dist <= radius else "❌ Вне зоны"
-            report += f"{idx}. <b>{name}</b> — {st} (~{int(dist)}м)\n"
+        lessons = await conn.fetch("SELECT * FROM schedule WHERE day_of_week = $1 ORDER BY time_start ASC", day_code)
+        
+        current_lesson = None
+        status_text = ""
+
+        for l in lessons:
+            start_min = parse_time_to_minutes(l['time_start'])
+            end_min = parse_time_to_minutes(l['time_end'])
+
+            if (start_min - 15) <= now_minutes <= end_min:
+                current_lesson = l
+                if now_minutes <= (start_min + 5):
+                    status_text = "✅ Вовремя"
+                else:
+                    late_by = now_minutes - start_min
+                    status_text = f"⚠️ Опоздание на {late_by} мин."
+                break
+
+        if current_lesson:
+            subject_name = current_lesson['subject']
+            await conn.execute("""
+                INSERT INTO attendance (telegram_id, subject, checkin_time, status, distance)
+                VALUES ($1, $2, $3, $4, $5)
+            """, message.from_user.id, subject_name, now, status_text, int(dist))
+
+            msg = (
+                f"🎯 <b>Отметка принята!</b>\n\n"
+                f"📖 Предмет: <b>{subject_name}</b>\n"
+                f"⏰ Статус: <b>{status_text}</b>\n"
+                f"📍 Расстояние: ~<b>{int(dist)}м</b>"
+            )
         else:
-            report += f"{idx}. ⚙️ <b>{name}</b> — Не ответил\n"
-    await message.answer(report, parse_mode="HTML")
+            msg = (
+                f"📍 <b>Геопозиция принята!</b> (~{int(dist)}м)\n"
+                f"ℹ️ Сейчас по расписанию нет активных пар, отметка сохранена."
+            )
+            await conn.execute("""
+                INSERT INTO attendance (telegram_id, subject, checkin_time, status, distance)
+                VALUES ($1, $2, $3, $4, $5)
+            """, message.from_user.id, "Вне пар", now, "Вне расписания", int(dist))
+
+    await message.answer(msg, parse_mode="HTML", reply_markup=student_main_kb)
 
 # Настройки администратора
 @router.message(F.text == "🎯 Установить центр ВУЗа")
@@ -473,28 +495,3 @@ async def admin_process_radius(message: Message, state: FSMContext):
     await set_setting(get_db_pool(), 'radius', new_radius)
     await state.clear()
     await message.answer(f"✅ Новый радиус: <b>{new_radius}м</b>", parse_mode="HTML")
-
-
-@router.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext, bot: Bot):  # <-- Обязательно добавьте bot: Bot
-    if message.from_user.id == ADMIN_ID:
-        # Устанавливаем WebApp кнопку слева от поля ввода ТОЛЬКО для вас
-        await bot.set_chat_menu_button(
-            chat_id=message.chat.id,
-            menu_button=MenuButtonWebApp(
-                text="📊 Дашборд",
-                web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard")
-            )
-        )
-        
-        # ... дальше ваш существующий код для админа ...
-        pool = get_db_pool()
-        radius = await get_setting(pool, 'radius', DEFAULT_RADIUS)
-        # ...
-        return
-
-    # Для ВСЕХ остальных (студентов) сбрасываем WebApp кнопку
-    await bot.set_chat_menu_button(
-        chat_id=message.chat.id,
-        menu_button=MenuButtonDefault()
-    )
