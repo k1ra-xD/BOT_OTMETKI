@@ -1,6 +1,8 @@
-aiogram>=3.0.0
-aiohttp
+aiogram
 asyncpg
-requests
-beautifulsoup4
+aiohttp
+google-api-python-client
+google-auth
 openpyxl
+beautifulsoup4
+requests

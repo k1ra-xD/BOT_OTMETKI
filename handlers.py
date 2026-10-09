@@ -349,19 +349,7 @@ async def handle_location(message: Message, state: FSMContext):
         now_minutes = now.hour * 60 + now.minute
         day_code = now.weekday()
 
-        async with pool.acquire() as conn:
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS attendance (
-                    id SERIAL PRIMARY KEY,
-                    telegram_id BIGINT,
-                    subject TEXT,
-                    checkin_time TIMESTAMP,
-                    status TEXT,
-                    distance INT
-                );
-            """)
-
-            # Если человек ВНЕ ЗОНЫ, всё равно сохраняем попытку в БД с соответствующим статусом
+              # Если человек ВНЕ ЗОНЫ, всё равно сохраняем попытку в БД с соответствующим статусом
             if not is_inside:
                 await conn.execute("""
                     INSERT INTO attendance (telegram_id, subject, checkin_time, status, distance)

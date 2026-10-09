@@ -9,6 +9,7 @@ from config import TOKEN, DATABASE_URL, ASTANA_TZ, ADMIN_ID
 from db import init_db
 from handlers import router, set_db_pool, get_db_pool
 from web import create_web_app
+from drive_handlers import drive_router
 
 notified_lessons = set()
 
@@ -92,6 +93,7 @@ async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
+    dp.include_router(drive_router)
 
     asyncio.create_task(schedule_notifications_loop(bot))
 
