@@ -59,9 +59,10 @@ DASHBOARD_HTML = """
                         const li = document.createElement('li');
                         const subj = r.subject ? ` (${r.subject})` : '';
                         const time = r.time ? `<span class="time">${r.time}</span>` : '';
+                        const statusBadge = r.status ? `<span style="font-size:11px; margin-left:6px; padding:2px 6px; border-radius:4px; background:rgba(0,0,0,0.06); font-weight:bold;">${r.status}</span>` : '';
                         li.innerHTML = `
                             <div>
-                                <b>${r.name}</b>
+                                <b>${r.name}</b> ${statusBadge}
                                 <span class="sub-text">Дистанция: ~${Math.round(r.dist)}м ${subj}</span>
                             </div>
                             ${time}
@@ -103,7 +104,8 @@ def create_web_app(get_db_pool, current_session=None):
                     COALESCE(s.full_name, 'ID: ' || a.telegram_id::text) AS name,
                     a.distance,
                     a.subject,
-                    a.checkin_time
+                    a.checkin_time,
+                    a.status
                 FROM attendance a
                 LEFT JOIN students s ON a.telegram_id = s.telegram_id
                 ORDER BY a.checkin_time DESC
@@ -117,7 +119,8 @@ def create_web_app(get_db_pool, current_session=None):
                 "name": r['name'],
                 "dist": r['distance'] or 0,
                 "subject": r['subject'] or "",
-                "time": time_formatted
+                "time": time_formatted,
+                "status": r['status'] or ""
             })
                 
         return web.json_response({
