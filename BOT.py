@@ -65,7 +65,7 @@ async def main():
 
     asyncio.create_task(schedule_notifications_loop(bot))
 
-    app = create_web_app(get_db_pool)
+    app = create_web_app(get_db_pool, None)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 8080))
