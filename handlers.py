@@ -330,7 +330,8 @@ async def handle_location(message: Message, state: FSMContext):
         pool = get_db_pool()
 
         if current_state == RegStates.waiting_for_uni_location.state:
-            if message.from_user.id != ADMIN_ID: return
+            if message.from_user.id != ADMIN_ID: 
+                return
             await set_setting(pool, 'lat', message.location.latitude)
             await set_setting(pool, 'lon', message.location.longitude)
             await state.clear()
@@ -349,7 +350,8 @@ async def handle_location(message: Message, state: FSMContext):
         now_minutes = now.hour * 60 + now.minute
         day_code = now.weekday()
 
-              # Если человек ВНЕ ЗОНЫ, всё равно сохраняем попытку в БД с соответствующим статусом
+        async with pool.acquire() as conn:
+            # Если человек ВНЕ ЗОНЫ, сохраняем попытку в БД
             if not is_inside:
                 await conn.execute("""
                     INSERT INTO attendance (telegram_id, subject, checkin_time, status, distance)
