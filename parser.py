@@ -50,45 +50,46 @@ def extract_lesson_details(raw_text: str):
 
     return subject, lesson_type, teacher, room
 
+import urllib.parse
+import requests
+from bs4 import BeautifulSoup
+
+# Прямой fallback-URL на случай динамического рендеринга страницы
+FALLBACK_SCHEDULE_URL = "https://esil.edu.kz/api/media/file/%2B%D0%A0%D0%B0%D1%81%D0%BF%D0%B8%D1%81%D0%B0%D0%BD%D0%B8%D0%B5_2%D0%BA-4%D0%B3%20%2B1%D0%BA3%D0%B3%2B1%D0%BA2%D0%B3%20009-6.xlsx"
+
 def download_schedule_file():
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    res = requests.get(SCHEDULE_PAGE_URL, headers=headers, timeout=30)
-    res.raise_for_status()
-    
-    # Очищаем HTML от неразрывных пробелов \xa0
-    html_text = res.text.replace('\xa0', ' ')
-    soup = BeautifulSoup(html_text, 'html.parser')
-    
     target_url = None
 
-    # Поиск по строкам новой таблицы расписания
-    for row in soup.find_all('tr'):
-        row_text = " ".join(row.get_text().split()).lower()
-        
-        # Точный фильтр под новую верстку сайта: 2 курс 4 года / 1-2 курс
-        if ("2 курса 4 года" in row_text or "1-2 курс" in row_text) and "магистрантов" not in row_text:
-            link_tag = row.find('a', href=True)
-            if link_tag:
-                target_url = link_tag['href'].strip()
-                break
+    try:
+        res = requests.get(SCHEDULE_PAGE_URL, headers=headers, timeout=15)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            
+            # Поиск ссылки по атрибутам href и декодированным именам файлов
+            for link in soup.find_all('a', href=True):
+                href = link['href'].strip()
+                decoded_href = urllib.parse.unquote(href).lower()
+                
+                if ("/api/media/file/" in href or ".xlsx" in decoded_href) and any(k in decoded_href for k in ["2к", "2_к", "2-к", "2 курс"]):
+                    target_url = href
+                    break
+    except Exception as e:
+        print(f"Ошибка при парсинге страницы: {e}")
 
-    # Резервный поиск по тегам ссылок <a>
+    # Если сайт использует pure JS рендеринг и ссылка не найдена в static HTML
     if not target_url:
-        for link in soup.find_all('a', href=True):
-            context = " ".join(link.find_parent(['tr', 'div', 'p']).get_text().split()).lower() if link.find_parent(['tr', 'div', 'p']) else ""
-            if ("2 курса 4 года" in context or "1-2 курс" in context) and "магистрантов" not in context:
-                target_url = link['href'].strip()
-                break
+        target_url = FALLBACK_SCHEDULE_URL
 
-    if not target_url:
-        raise Exception("Не найдена ссылка на расписание 2 курса в новой таблице сайта esil.edu.kz.")
-        
-    target_url = target_url if target_url.startswith("http") else "https://esil.edu.kz" + target_url
-    
+    if not target_url.startswith("http"):
+        target_url = "https://esil.edu.kz" + target_url
+
+    print(f"Загрузка файла расписания: {target_url}")
     f_res = requests.get(target_url, headers=headers, timeout=30)
     f_res.raise_for_status()
+
     with open(LOCAL_FILE_NAME, "wb") as f:
         f.write(f_res.content)
 
