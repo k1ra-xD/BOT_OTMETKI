@@ -1,59 +1,67 @@
-import io
+import os
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaFileUpload
 
+# ID вашей папки «лекции» из предоставленной ссылки
+MAIN_FOLDER_ID = "1282un1P5x8Qk0tejGYAUjj-cPU_k1JxQ"
+
+# Область доступа к Google Drive API
 SCOPES = ['https://www.googleapis.com/auth/drive']
-SERVICE_ACCOUNT_FILE = 'credentials.json'
-
-# ID главной папки "Учёба" на вашем Google Диске
-PARENT_FOLDER_ID = '1282un1P5x8Qk0tejGYAUjj-cPU_k1JxQ'
-
 
 def get_drive_service():
-    """Авторизация и получение объекта сервиса Google Drive API."""
-    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    """Авторизация сервисного аккаунта через файл ключа или переменную окружения"""
+    key_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "credentials.json")
+    creds = Credentials.from_service_account_file(key_path, scopes=SCOPES)
     return build('drive', 'v3', credentials=creds)
 
-
-def get_or_create_subfolder(service, folder_name: str, parent_id: str) -> str:
-    """Ищет папку предмета внутри PARENT_FOLDER_ID. Если папки нет — создаёт её."""
-    query = f"'{parent_id}' in parents and name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+def get_or_create_subject_folder(service, subject_name: str) -> str:
+    """
+    Ищет папку предмета СТРОГО внутри вашей папки «лекции».
+    Если папка не найдена — создаёт её внутри вашей папки «лекции».
+    """
+    query = (
+        f"name = '{subject_name}' and "
+        f"'{MAIN_FOLDER_ID}' in parents and "
+        f"mimeType = 'application/vnd.google-apps.folder' and "
+        f"trashed = false"
+    )
     results = service.files().list(q=query, fields="files(id, name)").execute()
-    items = results.get('files', [])
+    folders = results.get('files', [])
 
-    if items:
-        return items[0]['id']
+    if folders:
+        return folders[0]['id']
 
-    file_metadata = {
-        'name': folder_name,
+    # Создаем папку предмета внутри главной папки лекций
+    folder_metadata = {
+        'name': subject_name,
         'mimeType': 'application/vnd.google-apps.folder',
-        'parents': [parent_id]
+        'parents': [MAIN_FOLDER_ID]
     }
-    folder = service.files().create(body=file_metadata, fields='id').execute()
+    folder = service.files().create(body=folder_metadata, fields='id').execute()
     return folder.get('id')
 
-
-async def upload_file_to_subject(file_bytes: bytes, filename: str, subject_name: str) -> str:
+def upload_file_to_drive(file_path: str, filename: str, subject_name: str) -> str:
     """
-    Загружает файл в папку указанного предмета и возвращает прямую ссылку на него.
+    Загружает файл в подпапку предмета внутри вашей папки «лекции»
+    и возвращает ссылку на просмотр файла.
     """
     service = get_drive_service()
     
-    # 1. Находим или создаем папку для предмета (например, "Философия")
-    subject_folder_id = get_or_create_subfolder(service, subject_name, PARENT_FOLDER_ID)
-    
-    # 2. Загружаем сам файл
+    # Получаем или создаем папку для предмета
+    folder_id = get_or_create_subject_folder(service, subject_name)
+
+    # Загружаем файл с указанием родительской папки предмета
     file_metadata = {
         'name': filename,
-        'parents': [subject_folder_id]
+        'parents': [folder_id]
     }
-    media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype='application/octet-stream', resumable=True)
     
-    file = service.files().create(
+    media = MediaFileUpload(file_path, resumable=True)
+    uploaded_file = service.files().create(
         body=file_metadata,
         media_body=media,
         fields='id, webViewLink'
     ).execute()
-    
-    return file.get('webViewLink')
+
+    return uploaded_file.get('webViewLink')
