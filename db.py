@@ -38,3 +38,30 @@ async def init_db(db_pool: asyncpg.Pool):
         await conn.execute("INSERT INTO settings (key, value) VALUES ('lat', $1) ON CONFLICT (key) DO NOTHING", str(DEFAULT_UNI_LAT))
         await conn.execute("INSERT INTO settings (key, value) VALUES ('lon', $1) ON CONFLICT (key) DO NOTHING", str(DEFAULT_UNI_LON))
         await conn.execute("INSERT INTO settings (key, value) VALUES ('radius', $1) ON CONFLICT (key) DO NOTHING", str(DEFAULT_RADIUS))
+
+async def get_setting(pool, key: str, default=None):
+    """Получить значение настройки из базы данных"""
+    if not pool:
+        return default
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT value FROM settings WHERE key = $1", key)
+        if row and row['value'] is not None:
+            val = row['value']
+            try:
+                if '.' in str(val):
+                    return float(val)
+                return int(val)
+            except ValueError:
+                return val
+        return default
+
+async def set_setting(pool, key: str, value):
+    """Сохранить или обновить значение настройки в базе данных"""
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO settings (key, value)
+            VALUES ($1, $2)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """, key, str(value))
