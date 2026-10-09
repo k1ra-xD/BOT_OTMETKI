@@ -1,7 +1,8 @@
+import io
 import os
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
 # ID вашей папки «лекции»
 MAIN_FOLDER_ID = "1282un1P5x8Qk0tejGYAUjj-cPU_k1JxQ"
@@ -16,7 +17,7 @@ def get_drive_service():
     return build('drive', 'v3', credentials=creds)
 
 def get_or_create_subject_folder(service, subject_name: str) -> str:
-    """Ищет или создаёт папку предмета строго внутри основной папки лекций"""
+    """Ищет или создаёт папку предмета строго внутри вашей папки «лекции»"""
     query = (
         f"name = '{subject_name}' and "
         f"'{MAIN_FOLDER_ID}' in parents and "
@@ -37,8 +38,17 @@ def get_or_create_subject_folder(service, subject_name: str) -> str:
     folder = service.files().create(body=folder_metadata, fields='id').execute()
     return folder.get('id')
 
-def upload_file_to_subject(file_path: str, filename: str, subject_name: str) -> str:
-    """Загружает файл в подпапку предмета внутри папки лекций"""
+def upload_file_to_subject(
+    file_path: str = None,
+    filename: str = "file",
+    subject_name: str = "Общее",
+    file_bytes: bytes = None,
+    **kwargs
+) -> str:
+    """
+    Универсальная загрузка файла на Google Диск:
+    поддерживает как путь к файлу (file_path), так и массив байтов (file_bytes).
+    """
     service = get_drive_service()
     folder_id = get_or_create_subject_folder(service, subject_name)
 
@@ -46,8 +56,21 @@ def upload_file_to_subject(file_path: str, filename: str, subject_name: str) -> 
         'name': filename,
         'parents': [folder_id]
     }
-    
-    media = MediaFileUpload(file_path, resumable=True)
+
+    # Подготавливаем медиа-поток
+    if file_bytes is not None:
+        if isinstance(file_bytes, bytes):
+            fh = io.BytesIO(file_bytes)
+        elif hasattr(file_bytes, 'read'):
+            fh = file_bytes
+        else:
+            fh = io.BytesIO(bytes(file_bytes))
+        media = MediaIoBaseUpload(fh, mimetype='application/octet-stream', resumable=True)
+    elif file_path is not None:
+        media = MediaFileUpload(file_path, resumable=True)
+    else:
+        raise ValueError("Необходимо передать либо file_bytes, либо file_path")
+
     uploaded_file = service.files().create(
         body=file_metadata,
         media_body=media,
@@ -56,5 +79,5 @@ def upload_file_to_subject(file_path: str, filename: str, subject_name: str) -> 
 
     return uploaded_file.get('webViewLink')
 
-# Алиас на случай, если где-то используется старое название
+# Синоним для совместимости
 upload_file_to_drive = upload_file_to_subject
