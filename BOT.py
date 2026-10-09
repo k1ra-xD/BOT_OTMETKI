@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher
 
 from config import TOKEN, DATABASE_URL, ASTANA_TZ, ADMIN_ID
 from db import init_db
-from handlers import router, set_db_pool, get_db_pool, current_session
+from handlers import router, set_db_pool, get_db_pool
 from web import create_web_app
 
 notified_lessons = set()
@@ -65,7 +65,7 @@ async def main():
 
     asyncio.create_task(schedule_notifications_loop(bot))
 
-    app = create_web_app(get_db_pool, current_session)
+    app = create_web_app(get_db_pool)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 8080))
