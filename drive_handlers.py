@@ -2,7 +2,8 @@ import asyncio
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from drive_helper import upload_file_to_subject
-from handlers import BannedMiddleware
+from handlers import BannedMiddleware, get_db_pool
+from config import ADMIN_ID
 
 drive_router = Router()
 drive_router.message.middleware(BannedMiddleware())
@@ -11,6 +12,10 @@ pending_files = {}
 
 @drive_router.message(F.document | F.photo)
 async def handle_incoming_file(message: Message):
+    # Ограничение прав: доступ к загрузке только у админа
+    if message.from_user.id != ADMIN_ID:
+        return
+
     if message.document:
         file_id = message.document.file_id
         file_name = message.document.file_name
@@ -23,21 +28,38 @@ async def handle_incoming_file(message: Message):
         'file_name': file_name
     }
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📚 Философия", callback_data="drive_sub:Философия"),
-            InlineKeyboardButton(text="💻 Программирование", callback_data="drive_sub:Программирование")
-        ],
-        [
-            InlineKeyboardButton(text="📐 Высшая математика", callback_data="drive_sub:Высшая математика"),
-            InlineKeyboardButton(text="🇬🇧 Английский язык", callback_data="drive_sub:Английский язык")
-        ]
-    ])
+    buttons = []
+    pool = get_db_pool()
+    
+    if pool:
+        async with pool.acquire() as conn:
+            # Получаем все уникальные предметы из расписания
+            rows = await conn.fetch("SELECT DISTINCT subject FROM schedule WHERE subject IS NOT NULL AND subject != '' ORDER BY subject ASC")
+            subjects = [r['subject'] for r in rows]
 
+            # Формируем сетку из кнопок (по 2 предмета в ряд)
+            row_buttons = []
+            for subj in subjects:
+                row_buttons.append(InlineKeyboardButton(text=f"📚 {subj}", callback_data=f"drive_sub:{subj}"))
+                if len(row_buttons) == 2:
+                    buttons.append(row_buttons)
+                    row_buttons = []
+            if row_buttons:
+                buttons.append(row_buttons)
+
+    # Запасная кнопка, если расписание ещё не заполнено
+    if not buttons:
+        buttons.append([InlineKeyboardButton(text="📁 Общее", callback_data="drive_sub:Общее")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.reply("📁 В какую папку сохранить файл на Google Диске?", reply_markup=kb)
 
 @drive_router.callback_query(F.data.startswith("drive_sub:"))
 async def process_drive_upload(callback: CallbackQuery, bot: Bot):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ У вас нет прав для загрузки файлов.", show_alert=True)
+        return
+
     subject = callback.data.split(":")[1]
     user_id = callback.from_user.id
 
@@ -45,7 +67,7 @@ async def process_drive_upload(callback: CallbackQuery, bot: Bot):
         await callback.answer("Файл не найден. Отправьте файл заново.", show_alert=True)
         return
 
-    await callback.message.edit_text(f"⏳ Загружаю файл в папку **{subject}**...")
+    await callback.message.edit_text(f"⏳ Загружаю файл в папку **{subject}**...", parse_mode="Markdown")
 
     file_info = pending_files.pop(user_id)
     
@@ -53,7 +75,6 @@ async def process_drive_upload(callback: CallbackQuery, bot: Bot):
         tg_file = await bot.get_file(file_info['file_id'])
         downloaded_file = await bot.download_file(tg_file.file_path)
 
-        # Выполняем синхронную загрузку в отдельном потоке, чтобы не блокировать бота
         drive_url = await asyncio.to_thread(
             upload_file_to_subject,
             file_bytes=downloaded_file.getvalue(),
