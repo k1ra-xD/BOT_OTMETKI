@@ -23,14 +23,10 @@ async def handle_incoming_file(message: Message):
         file_id = message.photo[-1].file_id
         file_name = f"photo_{message.date.strftime('%Y%m%d_%H%M%S')}.jpg"
 
-    pending_files[message.from_user.id] = {
-        'file_id': file_id,
-        'file_name': file_name
-    }
-
     buttons = []
+    subject_map = {}
     pool = get_db_pool()
-    
+
     if pool:
         async with pool.acquire() as conn:
             # Получаем все уникальные предметы из расписания
@@ -38,9 +34,14 @@ async def handle_incoming_file(message: Message):
             subjects = [r['subject'] for r in rows]
 
             # Формируем сетку из кнопок (по 2 предмета в ряд)
+            # В callback_data передаем только короткий индекс i, чтобы уложиться в 64 байта
             row_buttons = []
-            for subj in subjects:
-                row_buttons.append(InlineKeyboardButton(text=f"📚 {subj}", callback_data=f"drive_sub:{subj}"))
+            for i, subj in enumerate(subjects):
+                subject_map[str(i)] = subj
+                # Сокращаем текст на самой кнопке, если имя слишком длинное
+                btn_text = f"📚 {subj[:25]}..." if len(subj) > 28 else f"📚 {subj}"
+                row_buttons.append(InlineKeyboardButton(text=btn_text, callback_data=f"drive_sub:{i}"))
+                
                 if len(row_buttons) == 2:
                     buttons.append(row_buttons)
                     row_buttons = []
@@ -49,7 +50,15 @@ async def handle_incoming_file(message: Message):
 
     # Запасная кнопка, если расписание ещё не заполнено
     if not buttons:
-        buttons.append([InlineKeyboardButton(text="📁 Общее", callback_data="drive_sub:Общее")])
+        subject_map["default"] = "Общее"
+        buttons.append([InlineKeyboardButton(text="📁 Общее", callback_data="drive_sub:default")])
+
+    # Сохраняем данные файла и карту предметов для текущего пользователя
+    pending_files[message.from_user.id] = {
+        'file_id': file_id,
+        'file_name': file_name,
+        'subject_map': subject_map
+    }
 
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.reply("📁 В какую папку сохранить файл на Google Диске?", reply_markup=kb)
@@ -60,17 +69,18 @@ async def process_drive_upload(callback: CallbackQuery, bot: Bot):
         await callback.answer("❌ У вас нет прав для загрузки файлов.", show_alert=True)
         return
 
-    subject = callback.data.split(":")[1]
     user_id = callback.from_user.id
 
     if user_id not in pending_files:
-        await callback.answer("Файл не найден. Отправьте файл заново.", show_alert=True)
+        await callback.answer("Файл не найден или сессия истекла. Отправьте файл заново.", show_alert=True)
         return
+
+    subj_key = callback.data.split(":")[1]
+    file_info = pending_files.pop(user_id)
+    subject = file_info['subject_map'].get(subj_key, "Общее")
 
     await callback.message.edit_text(f"⏳ Загружаю файл в папку **{subject}**...", parse_mode="Markdown")
 
-    file_info = pending_files.pop(user_id)
-    
     try:
         tg_file = await bot.get_file(file_info['file_id'])
         downloaded_file = await bot.download_file(tg_file.file_path)
