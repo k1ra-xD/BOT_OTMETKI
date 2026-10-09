@@ -1,23 +1,33 @@
 import io
 import os
-from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
-# ID вашей папки «лекции»
 MAIN_FOLDER_ID = "1282un1P5x8Qk0tejGYAUjj-cPU_k1JxQ"
-
-# Область доступа к Google Drive API
-SCOPES = ['https://www.googleapis.com/auth/drive']
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 def get_drive_service():
-    """Авторизация сервисного аккаунта"""
-    key_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "credentials.json")
-    creds = Credentials.from_service_account_file(key_path, scopes=SCOPES)
+    """Авторизация через пользовательский token.json"""
+    token_path = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
+    
+    if not os.path.exists(token_path):
+        raise FileNotFoundError(
+            f"Файл '{token_path}' не найден! Загрузите token.json в Secret Files на Render."
+        )
+
+    creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+
+    # Автоматическое обновление токена, если он истечет
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        with open(token_path, 'w') as token_file:
+            token_file.write(creds.to_json())
+
     return build('drive', 'v3', credentials=creds)
 
 def get_or_create_subject_folder(service, subject_name: str) -> str:
-    """Ищет или создаёт папку предмета строго внутри вашей папки «лекции»"""
     query = (
         f"name = '{subject_name}' and "
         f"'{MAIN_FOLDER_ID}' in parents and "
@@ -45,10 +55,6 @@ def upload_file_to_subject(
     file_bytes: bytes = None,
     **kwargs
 ) -> str:
-    """
-    Универсальная загрузка файла на Google Диск:
-    поддерживает как путь к файлу (file_path), так и массив байтов (file_bytes).
-    """
     service = get_drive_service()
     folder_id = get_or_create_subject_folder(service, subject_name)
 
@@ -57,7 +63,6 @@ def upload_file_to_subject(
         'parents': [folder_id]
     }
 
-    # Подготавливаем медиа-поток
     if file_bytes is not None:
         if isinstance(file_bytes, bytes):
             fh = io.BytesIO(file_bytes)
@@ -69,7 +74,7 @@ def upload_file_to_subject(
     elif file_path is not None:
         media = MediaFileUpload(file_path, resumable=True)
     else:
-        raise ValueError("Необходимо передать либо file_bytes, либо file_path")
+        raise ValueError("Необходимо передать file_bytes или file_path")
 
     uploaded_file = service.files().create(
         body=file_metadata,
@@ -79,5 +84,4 @@ def upload_file_to_subject(
 
     return uploaded_file.get('webViewLink')
 
-# Синоним для совместимости
 upload_file_to_drive = upload_file_to_subject
