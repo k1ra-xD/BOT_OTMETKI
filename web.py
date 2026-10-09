@@ -9,53 +9,71 @@ DASHBOARD_HTML = """
     <title>Дашборд Посещаемости</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body { font-family: sans-serif; background: var(--tg-theme-bg-color, #f4f4f9); color: var(--tg-theme-text-color, #222); padding: 16px; margin: 0; }
-        .card { background: var(--tg-theme-secondary-bg-color, #fff); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: var(--tg-theme-bg-color, #f4f4f9); color: var(--tg-theme-text-color, #222); padding: 16px; margin: 0; }
+        .card { background: var(--tg-theme-secondary-bg-color, #fff); border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
         .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .stat-num { font-size: 24px; font-weight: bold; color: var(--tg-theme-button-color, #0088cc); }
         .status-badge { display: inline-block; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: bold; }
         .active { background: #e3f8e0; color: #2e7d32; }
-        .inactive { background: #ffebee; color: #c62828; }
         ul { list-style: none; padding: 0; margin: 8px 0 0 0; }
-        li { padding: 6px 0; border-bottom: 1px solid rgba(0,0,0,0.05); font-size: 14px; }
+        li { padding: 10px 0; border-bottom: 1px solid rgba(0,0,0,0.05); font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
+        li:last-child { border-bottom: none; }
+        .time { font-size: 12px; color: #888; font-weight: normal; }
+        .sub-text { font-size: 12px; color: #666; display: block; margin-top: 2px; }
     </style>
 </head>
 <body>
     <h2>📊 Дашборд Посещаемости</h2>
-    <div class="card"><div style="display:flex; justify-content:space-between; align-items:center;"><span>Статус проверки:</span><span id="session-status" class="status-badge inactive">Завершена</span></div></div>
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span>Статус базы:</span>
+            <span id="session-status" class="status-badge active">Подключено</span>
+        </div>
+    </div>
     <div class="stat-grid">
         <div class="card"><div>Всего студентов</div><div id="total-students" class="stat-num">0</div></div>
-        <div class="card"><div>Ответили сейчас</div><div id="responded-count" class="stat-num">0</div></div>
+        <div class="card"><div>Всего отметок</div><div id="responded-count" class="stat-num">0</div></div>
     </div>
-    <div class="card"><h3>📍 Откликнулись:</h3><ul id="responses-list"><li><i>Список пуст</i></li></ul></div>
+    <div class="card">
+        <h3>📍 Последние отметки:</h3>
+        <ul id="responses-list"><li><i>Загрузка данных...</i></li></ul>
+    </div>
     <script>
-        const tg = window.Telegram.WebApp; tg.expand();
+        const tg = window.Telegram.WebApp; 
+        tg.ready();
+        tg.expand();
+
         async function loadStats() {
             try {
                 const res = await fetch('/api/stats');
                 const data = await res.json();
-                document.getElementById('total-students').innerText = data.total_students;
-                document.getElementById('responded-count').innerText = data.responded_count;
-                const statusBadge = document.getElementById('session-status');
-                if (data.is_active) { 
-                    statusBadge.innerText = 'Активна'; 
-                    statusBadge.className = 'status-badge active'; 
-                } else { 
-                    statusBadge.innerText = 'Завершена'; 
-                    statusBadge.className = 'status-badge inactive'; 
-                }
+                
+                document.getElementById('total-students').innerText = data.total_students || 0;
+                document.getElementById('responded-count').innerText = data.responded_count || 0;
+                
                 const list = document.getElementById('responses-list');
                 list.innerHTML = '';
+                
                 if (data.responses && data.responses.length > 0) {
                     data.responses.forEach(r => {
                         const li = document.createElement('li');
-                        li.innerText = `${r.name} — ~${Math.round(r.dist)}м`;
+                        const subj = r.subject ? ` (${r.subject})` : '';
+                        const time = r.time ? `<span class="time">${r.time}</span>` : '';
+                        li.innerHTML = `
+                            <div>
+                                <b>${r.name}</b>
+                                <span class="sub-text">Дистанция: ~${Math.round(r.dist)}м ${subj}</span>
+                            </div>
+                            ${time}
+                        `;
                         list.appendChild(li);
                     });
                 } else {
-                    list.innerHTML = '<li><i>Список пуст</i></li>';
+                    list.innerHTML = '<li><i>Пока нет сохранённых отметок</i></li>';
                 }
-            } catch(e) { console.error(e); }
+            } catch(e) { 
+                console.error(e); 
+            }
         }
         loadStats();
         setInterval(loadStats, 3000);
@@ -64,7 +82,7 @@ DASHBOARD_HTML = """
 </html>
 """
 
-def create_web_app(get_db_pool, current_session):
+def create_web_app(get_db_pool, current_session=None):
     app = web.Application()
 
     async def handle_dashboard(request):
@@ -72,20 +90,40 @@ def create_web_app(get_db_pool, current_session):
 
     async def handle_api_stats(request):
         db_pool = get_db_pool()
+        if not db_pool:
+            return web.json_response({"error": "No DB connection"}, status=500)
+
         async with db_pool.acquire() as conn:
+            # Общее количество зарегистрированных студентов
             total_students = await conn.fetchval("SELECT COUNT(*) FROM students")
             
+            # Чтение отметок из таблицы attendance
+            rows = await conn.fetch("""
+                SELECT 
+                    COALESCE(s.full_name, 'ID: ' || a.telegram_id::text) AS name,
+                    a.distance,
+                    a.subject,
+                    a.checkin_time
+                FROM attendance a
+                LEFT JOIN students s ON a.telegram_id = s.telegram_id
+                ORDER BY a.checkin_time DESC
+                LIMIT 50
+            """)
+
         responses_data = []
-        async with db_pool.acquire() as conn:
-            for t_id, d in current_session["responses"].items():
-                row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", t_id)
-                name = row['full_name'] if row else "Неизвестный"
-                responses_data.append({"name": name, "dist": d["dist"]})
+        for r in rows:
+            time_formatted = r['checkin_time'].strftime("%d.%m %H:%M") if r['checkin_time'] else ""
+            responses_data.append({
+                "name": r['name'],
+                "dist": r['distance'] or 0,
+                "subject": r['subject'] or "",
+                "time": time_formatted
+            })
                 
         return web.json_response({
-            "is_active": current_session["is_active"],
+            "is_active": True,
             "total_students": total_students or 0,
-            "responded_count": len(current_session["responses"]),
+            "responded_count": len(responses_data),
             "responses": responses_data
         })
 
