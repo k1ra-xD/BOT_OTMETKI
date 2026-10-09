@@ -1,4 +1,6 @@
+from datetime import datetime, timedelta
 from aiohttp import web
+from config import ASTANA_TZ
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -32,10 +34,10 @@ DASHBOARD_HTML = """
     </div>
     <div class="stat-grid">
         <div class="card"><div>Всего студентов</div><div id="total-students" class="stat-num">0</div></div>
-        <div class="card"><div>Всего отметок</div><div id="responded-count" class="stat-num">0</div></div>
+        <div class="card"><div>Отметок сегодня</div><div id="responded-count" class="stat-num">0</div></div>
     </div>
     <div class="card">
-        <h3>📍 Последние отметки:</h3>
+        <h3>📍 Отметки за сегодня:</h3>
         <ul id="responses-list"><li><i>Загрузка данных...</i></li></ul>
     </div>
     <script>
@@ -70,7 +72,7 @@ DASHBOARD_HTML = """
                         list.appendChild(li);
                     });
                 } else {
-                    list.innerHTML = '<li><i>Пока нет сохранённых отметок</i></li>';
+                    list.innerHTML = '<li><i>Сегодня отметок пока нет</i></li>';
                 }
             } catch(e) { 
                 console.error(e); 
@@ -94,11 +96,15 @@ def create_web_app(get_db_pool, current_session=None):
         if not db_pool:
             return web.json_response({"error": "No DB connection"}, status=500)
 
+        now = datetime.now(ASTANA_TZ)
+        today_start = datetime(now.year, now.month, now.day)
+        today_end = today_start + timedelta(days=1)
+
         async with db_pool.acquire() as conn:
             # Общее количество зарегистрированных студентов
             total_students = await conn.fetchval("SELECT COUNT(*) FROM students")
             
-            # Чтение отметок из таблицы attendance
+            # Чтение отметок из таблицы attendance ТОЛЬКО ЗА СЕГОДНЯ
             rows = await conn.fetch("""
                 SELECT 
                     COALESCE(s.full_name, 'ID: ' || a.telegram_id::text) AS name,
@@ -108,9 +114,10 @@ def create_web_app(get_db_pool, current_session=None):
                     a.status
                 FROM attendance a
                 LEFT JOIN students s ON a.telegram_id = s.telegram_id
+                WHERE a.checkin_time >= $1 AND a.checkin_time < $2
                 ORDER BY a.checkin_time DESC
-                LIMIT 50
-            """)
+                LIMIT 100
+            """, today_start, today_end)
 
         responses_data = []
         for r in rows:
