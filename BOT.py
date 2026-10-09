@@ -17,12 +17,42 @@ async def schedule_notifications_loop(bot: Bot):
         try:
             now = datetime.now(ASTANA_TZ)
             current_day = now.weekday()
+            current_time = now.strftime("%H:%M")
             target_time = (now + timedelta(minutes=10)).strftime("%H:%M")
             date_key = now.strftime("%Y-%m-%d")
 
             pool = get_db_pool()
             if pool:
                 async with pool.acquire() as conn:
+                    # 1. Рассылка на самой первой паре дня (ровно в начале пары для подтверждения присутствия)
+                    first_lesson = await conn.fetchrow(
+                        "SELECT * FROM schedule WHERE day_of_week = $1 ORDER BY time_start ASC LIMIT 1",
+                        current_day
+                    )
+                    if first_lesson and first_lesson['time_start'] == current_time:
+                        first_key = f"first_start_{date_key}_{first_lesson['id']}"
+                        if first_key not in notified_lessons:
+                            notified_lessons.add(first_key)
+                            text_first = (
+                                f"🔔 <b>Первая пара началась!</b>\n"
+                                f"⏰ <b>Время:</b> {first_lesson['time_start']} - {first_lesson['time_end']}\n"
+                                f"📖 <b>Предмет:</b> {first_lesson['subject']} ({first_lesson['lesson_type']})\n"
+                                f"👨‍🏫 <b>Преподаватель:</b> {first_lesson['teacher']}\n"
+                                f"🚪 <b>Аудитория:</b> {first_lesson['room']}\n\n"
+                                f"📍 <b>Подтвердите присутствие в университете:</b>\n"
+                                f"Нажмите кнопку <b>«📍 Я здесь»</b> внизу, чтобы отметиться!"
+                            )
+                            students = await conn.fetch("SELECT telegram_id FROM students")
+                            recipients = {s['telegram_id'] for s in students}
+                            if ADMIN_ID:
+                                recipients.add(ADMIN_ID)
+                            for user_id in recipients:
+                                try:
+                                    await bot.send_message(user_id, text_first, parse_mode="HTML")
+                                except Exception:
+                                    pass
+
+                    # 2. Обычные напоминания за 10 минут до пар
                     lessons = await conn.fetch(
                         "SELECT * FROM schedule WHERE day_of_week = $1 AND time_start = $2", 
                         current_day, target_time
