@@ -51,23 +51,42 @@ def extract_lesson_details(raw_text: str):
     return subject, lesson_type, teacher, room
 
 def download_schedule_file():
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     res = requests.get(SCHEDULE_PAGE_URL, headers=headers, timeout=30)
     res.raise_for_status()
-    soup = BeautifulSoup(res.text, 'html.parser')
+    
+    # Очищаем HTML от неразрывных пробелов \xa0
+    html_text = res.text.replace('\xa0', ' ')
+    soup = BeautifulSoup(html_text, 'html.parser')
     
     target_url = None
+
+    # Поиск по строкам новой таблицы расписания
     for row in soup.find_all('tr'):
-        text = row.get_text()
-        if "Расписание занятий 2 курса (4 года)" in text or "1 курса (3 года)" in text:
+        row_text = " ".join(row.get_text().split()).lower()
+        
+        # Точный фильтр под новую верстку сайта: 2 курс 4 года / 1-2 курс
+        if ("2 курса 4 года" in row_text or "1-2 курс" in row_text) and "магистрантов" not in row_text:
             link_tag = row.find('a', href=True)
             if link_tag:
-                href = link_tag['href']
-                target_url = href if href.startswith("http") else "https://esil.edu.kz" + href
+                target_url = link_tag['href'].strip()
                 break
+
+    # Резервный поиск по тегам ссылок <a>
     if not target_url:
-        raise Exception("Не найдена ссылка на файл расписания 2 курса на сайте.")
+        for link in soup.find_all('a', href=True):
+            context = " ".join(link.find_parent(['tr', 'div', 'p']).get_text().split()).lower() if link.find_parent(['tr', 'div', 'p']) else ""
+            if ("2 курса 4 года" in context or "1-2 курс" in context) and "магистрантов" not in context:
+                target_url = link['href'].strip()
+                break
+
+    if not target_url:
+        raise Exception("Не найдена ссылка на расписание 2 курса в новой таблице сайта esil.edu.kz.")
         
+    target_url = target_url if target_url.startswith("http") else "https://esil.edu.kz" + target_url
+    
     f_res = requests.get(target_url, headers=headers, timeout=30)
     f_res.raise_for_status()
     with open(LOCAL_FILE_NAME, "wb") as f:
