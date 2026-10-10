@@ -29,34 +29,28 @@ async def handle_incoming_files(message: Message, bot: Bot):
 
     file_info = {'file_id': file_id, 'file_name': file_name}
 
-    # Если это часть медиагруппы (альбома)
-    if message.media_group_id:
-        mg_id = message.media_group_id
-        if user_id not in pending_batches:
-            pending_batches[user_id] = {
-                'media_group_id': mg_id,
-                'files': [],
-                'chat_id': message.chat.id
-            }
-        
-        pending_batches[user_id]['files'].append(file_info)
+    # Если пользователь еще не начинал собирать пачку или предыдущая уже ушла в меню
+    if user_id not in pending_batches or 'timer_task' not in pending_batches[user_id]:
+        pending_batches[user_id] = {
+            'files': [],
+            'chat_id': message.chat.id
+        }
 
-        # Перезапускаем таймер сбора альбома (Telegram шлет части альбома с разницей в доли секунды)
-        if 'timer_task' in pending_batches[user_id]:
-            pending_batches[user_id]['timer_task'].cancel()
+    # Добавляем файл в общую копилку текущей пачки
+    pending_batches[user_id]['files'].append(file_info)
 
-        async def send_album_prompt():
-            await asyncio.sleep(0.7)  # Ждем, пока прилетят все файлы альбома
-            if user_id in pending_batches:
-                data = pending_batches.pop(user_id)
-                await show_subject_selection(bot, data['chat_id'], user_id, data['files'])
+    # Перезапускаем таймер ожидания (даем время долететь всем частям большой пачки)
+    if 'timer_task' in pending_batches[user_id] and pending_batches[user_id]['timer_task']:
+        pending_batches[user_id]['timer_task'].cancel()
 
-        pending_batches[user_id]['timer_task'] = asyncio.create_task(send_album_prompt())
-    
-    else:
-        # Одиночный файл
-        single_pending_files[user_id] = {'files': [file_info]}
-        await show_subject_selection(bot, message.chat.id, user_id, [file_info])
+    async def send_album_prompt():
+        # Увеличили задержку до 1.5 секунд, чтобы Telegram успел прислать все части тяжелой пачки
+        await asyncio.sleep(1.5) 
+        if user_id in pending_batches:
+            data = pending_batches.pop(user_id)
+            await show_subject_selection(bot, data['chat_id'], user_id, data['files'])
+
+    pending_batches[user_id]['timer_task'] = asyncio.create_task(send_album_prompt())
 
 
 async def show_subject_selection(bot: Bot, chat_id: int, user_id: int, files: list):
