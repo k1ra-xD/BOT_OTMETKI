@@ -25,7 +25,7 @@ async def schedule_notifications_loop(bot: Bot):
             pool = get_db_pool()
             if pool:
                 async with pool.acquire() as conn:
-                    # 1. Рассылка на самой первой паре дня (ровно в начале пары для подтверждения присутствия)
+                    # 1. Рассылка на самой первой паре дня
                     first_lesson = await conn.fetchrow(
                         "SELECT * FROM schedule WHERE day_of_week = $1 ORDER BY time_start ASC LIMIT 1",
                         current_day
@@ -34,12 +34,17 @@ async def schedule_notifications_loop(bot: Bot):
                         first_key = f"first_start_{date_key}_{first_lesson['id']}"
                         if first_key not in notified_lessons:
                             notified_lessons.add(first_key)
+                            
+                            online_link = first_lesson.get('online_link')
+                            link_text = f"\n🔗 <b>Ссылка на занятие:</b> {online_link}" if online_link else ""
+
                             text_first = (
                                 f"🔔 <b>Первая пара началась!</b>\n"
                                 f"⏰ <b>Время:</b> {first_lesson['time_start']} - {first_lesson['time_end']}\n"
                                 f"📖 <b>Предмет:</b> {first_lesson['subject']} ({first_lesson['lesson_type']})\n"
                                 f"👨‍🏫 <b>Преподаватель:</b> {first_lesson['teacher']}\n"
-                                f"🚪 <b>Аудитория:</b> {first_lesson['room']}\n\n"
+                                f"🚪 <b>Аудитория:</b> {first_lesson['room']}"
+                                f"{link_text}\n\n"
                                 f"📍 <b>Подтвердите присутствие в университете:</b>\n"
                                 f"Нажмите кнопку <b>«📍 Я здесь»</b> внизу, чтобы отметиться!"
                             )
@@ -68,12 +73,17 @@ async def schedule_notifications_loop(bot: Bot):
                             lesson_id_key = f"{date_key}_{lesson['id']}"
                             if lesson_id_key not in notified_lessons:
                                 notified_lessons.add(lesson_id_key)
+                                
+                                online_link = lesson.get('online_link')
+                                link_text = f"\n🔗 <b>Ссылка на занятие:</b> {online_link}" if online_link else ""
+
                                 text = (
                                     f"🔔 <b>Напоминание о паре!</b>\n"
                                     f"⏰ <b>Начало:</b> через 10 минут ({lesson['time_start']} - {lesson['time_end']})\n"
                                     f"📖 <b>Предмет:</b> {lesson['subject']} ({lesson['lesson_type']})\n"
                                     f"👨‍🏫 <b>Преподаватель:</b> {lesson['teacher']}\n"
                                     f"🚪 <b>Аудитория:</b> {lesson['room']}"
+                                    f"{link_text}"
                                 )
                                 for user_id in recipients:
                                     try:

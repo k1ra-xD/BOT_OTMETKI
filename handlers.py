@@ -75,6 +75,9 @@ student_main_kb = ReplyKeyboardMarkup(
         [
             KeyboardButton(text="📅 Расписание"), 
             KeyboardButton(text="📍 Я здесь", request_location=True)
+        ],
+        [
+            KeyboardButton(text="📁 Лекции на Google Диске")
         ]
     ],
     resize_keyboard=True
@@ -497,3 +500,12 @@ async def admin_process_radius(message: Message, state: FSMContext):
     await set_setting(get_db_pool(), 'radius', new_radius)
     await state.clear()
     await message.answer(f"✅ Новый радиус: <b>{new_radius}м</b>", parse_mode="HTML")
+
+@router.message(F.text == "📁 Лекции на Google Диске")
+async def show_lectures_link(message: Message):
+    await message.answer(
+        "📚 **Материалы и лекции:**\n\n"
+        "Все загруженные лекции и файлы по предметам вы можете найти в общей папке:\n"
+        "👉 [Открыть папку с лекциями на Google Диске](https://drive.google.com/drive/folders/1282un1P5x8Qk0tejGYAUjj-cPU_k1JxQ)",
+        parse_mode="Markdown"
+    )
