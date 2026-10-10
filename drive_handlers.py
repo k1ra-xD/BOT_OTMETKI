@@ -8,37 +8,70 @@ from config import ADMIN_ID
 drive_router = Router()
 drive_router.message.middleware(BannedMiddleware())
 
-pending_files = {}
+# Хранилище для медиагрупп и одиночных файлов
+pending_batches = {}  # {user_id: {'files': [...], 'task': asyncio_task}}
+single_pending_files = {} # для одиночных файлов
 
 @drive_router.message(F.document | F.photo)
-async def handle_incoming_file(message: Message):
-    # Ограничение прав: доступ к загрузке только у админа
+async def handle_incoming_files(message: Message, bot: Bot):
     if message.from_user.id != ADMIN_ID:
         return
 
+    user_id = message.from_user.id
+
+    # Извлекаем файл
     if message.document:
         file_id = message.document.file_id
         file_name = message.document.file_name
     else:
         file_id = message.photo[-1].file_id
-        file_name = f"photo_{message.date.strftime('%Y%m%d_%H%M%S')}.jpg"
+        file_name = f"photo_{message.date.strftime('%Y%m%d_%H%M%S_%f')}.jpg"
 
+    file_info = {'file_id': file_id, 'file_name': file_name}
+
+    # Если это часть медиагруппы (альбома)
+    if message.media_group_id:
+        mg_id = message.media_group_id
+        if user_id not in pending_batches:
+            pending_batches[user_id] = {
+                'media_group_id': mg_id,
+                'files': [],
+                'chat_id': message.chat.id
+            }
+        
+        pending_batches[user_id]['files'].append(file_info)
+
+        # Перезапускаем таймер сбора альбома (Telegram шлет части альбома с разницей в доли секунды)
+        if 'timer_task' in pending_batches[user_id]:
+            pending_batches[user_id]['timer_task'].cancel()
+
+        async def send_album_prompt():
+            await asyncio.sleep(0.7)  # Ждем, пока прилетят все файлы альбома
+            if user_id in pending_batches:
+                data = pending_batches.pop(user_id)
+                await show_subject_selection(bot, data['chat_id'], user_id, data['files'])
+
+        pending_batches[user_id]['timer_task'] = asyncio.create_task(send_album_prompt())
+    
+    else:
+        # Одиночный файл
+        single_pending_files[user_id] = {'files': [file_info]}
+        await show_subject_selection(bot, message.chat.id, user_id, [file_info])
+
+
+async def show_subject_selection(bot: Bot, chat_id: int, user_id: int, files: list):
     buttons = []
     subject_map = {}
     pool = get_db_pool()
 
     if pool:
         async with pool.acquire() as conn:
-            # Получаем все уникальные предметы из расписания
             rows = await conn.fetch("SELECT DISTINCT subject FROM schedule WHERE subject IS NOT NULL AND subject != '' ORDER BY subject ASC")
             subjects = [r['subject'] for r in rows]
 
-            # Формируем сетку из кнопок (по 2 предмета в ряд)
-            # В callback_data передаем только короткий индекс i, чтобы уложиться в 64 байта
             row_buttons = []
             for i, subj in enumerate(subjects):
                 subject_map[str(i)] = subj
-                # Сокращаем текст на самой кнопке, если имя слишком длинное
                 btn_text = f"📚 {subj[:25]}..." if len(subj) > 28 else f"📚 {subj}"
                 row_buttons.append(InlineKeyboardButton(text=btn_text, callback_data=f"drive_sub:{i}"))
                 
@@ -48,20 +81,21 @@ async def handle_incoming_file(message: Message):
             if row_buttons:
                 buttons.append(row_buttons)
 
-    # Запасная кнопка, если расписание ещё не заполнено
     if not buttons:
         subject_map["default"] = "Общее"
         buttons.append([InlineKeyboardButton(text="📁 Общее", callback_data="drive_sub:default")])
 
-    # Сохраняем данные файла и карту предметов для текущего пользователя
-    pending_files[message.from_user.id] = {
-        'file_id': file_id,
-        'file_name': file_name,
+    # Сохраняем файлы для этого пользователя под уникальным ключом выбора
+    single_pending_files[user_id] = {
+        'files': files,
         'subject_map': subject_map
     }
 
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.reply("📁 В какую папку сохранить файл на Google Диске?", reply_markup=kb)
+    count = len(files)
+    text = f"📁 Найдено файлов: **{count}**. В какую папку сохранить их на Google Диске?" if count > 1 else "📁 В какую папку сохранить файл на Google Диске?"
+    await bot.send_message(chat_id, text, reply_markup=kb, parse_mode="Markdown")
+
 
 @drive_router.callback_query(F.data.startswith("drive_sub:"))
 async def process_drive_upload(callback: CallbackQuery, bot: Bot):
@@ -71,31 +105,40 @@ async def process_drive_upload(callback: CallbackQuery, bot: Bot):
 
     user_id = callback.from_user.id
 
-    if user_id not in pending_files:
-        await callback.answer("Файл не найден или сессия истекла. Отправьте файл заново.", show_alert=True)
+    if user_id not in single_pending_files:
+        await callback.answer("Файлы не найдены или сессия истекла. Отправьте их заново.", show_alert=True)
         return
 
     subj_key = callback.data.split(":")[1]
-    file_info = pending_files.pop(user_id)
-    subject = file_info['subject_map'].get(subj_key, "Общее")
+    batch_data = single_pending_files.pop(user_id)
+    files = batch_data['files']
+    subject = batch_data['subject_map'].get(subj_key, "Общее")
 
-    await callback.message.edit_text(f"⏳ Загружаю файл в папку **{subject}**...", parse_mode="Markdown")
+    total = len(files)
+    await callback.message.edit_text(f"⏳ Начинаю загрузку {total} файл(ов) в папку **{subject}**...", parse_mode="Markdown")
 
-    try:
-        tg_file = await bot.get_file(file_info['file_id'])
-        downloaded_file = await bot.download_file(tg_file.file_path)
+    success_count = 0
+    for idx, file_info in enumerate(files, 1):
+        try:
+            await callback.message.edit_text(
+                f"⏳ Загрузка файла **{idx} из {total}** (`{file_info['file_name']}`) в папку **{subject}**...",
+                parse_mode="Markdown"
+            )
 
-        drive_url = await asyncio.to_thread(
-            upload_file_to_subject,
-            file_bytes=downloaded_file.getvalue(),
-            filename=file_info['file_name'],
-            subject_name=subject
-        )
+            tg_file = await bot.get_file(file_info['file_id'])
+            downloaded_file = await bot.download_file(tg_file.file_path)
 
-        await callback.message.edit_text(
-            f"✅ Файл успешно сохранён в папку **{subject}**!\n"
-            f"🔗 [Открыть файл на Google Диске]({drive_url})",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        await callback.message.edit_text(f"❌ Ошибка при загрузке на Google Диск: {e}")
+            await asyncio.to_thread(
+                upload_file_to_subject,
+                file_bytes=downloaded_file.getvalue(),
+                filename=file_info['file_name'],
+                subject_name=subject
+            )
+            success_count += 1
+        except Exception as e:
+            print(f"Ошибка загрузки файла {file_info['file_name']}: {e}")
+
+    await callback.message.edit_text(
+        f"✅ Успешно загружено файлов: **{success_count} из {total}** в папку **{subject}**!",
+        parse_mode="Markdown"
+    )
