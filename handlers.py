@@ -77,6 +77,7 @@ student_main_kb = ReplyKeyboardMarkup(
             KeyboardButton(text="📍 Я здесь", request_location=True)
         ],
         [
+            KeyboardButton(text="📤 Сдать СРО"),
             KeyboardButton(text="📁 Лекции на Google Диске")
         ]
     ],

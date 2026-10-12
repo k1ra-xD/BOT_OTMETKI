@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import asyncpg
 from aiohttp import web
 from aiogram import Bot, Dispatcher
+from sro_handlers import sro_router
 
 from config import TOKEN, DATABASE_URL, ASTANA_TZ, ADMIN_ID
 from db import init_db
@@ -104,6 +105,7 @@ async def main():
     dp = Dispatcher()
     dp.include_router(router)
     dp.include_router(drive_router)
+    dp.include_router(sro_router)
 
     asyncio.create_task(schedule_notifications_loop(bot))
 
