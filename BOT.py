@@ -103,9 +103,9 @@ async def main():
 
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
-    dp.include_router(router)
-    dp.include_router(drive_router)
     dp.include_router(sro_router)
+    dp.include_router(drive_router)
+    dp.include_router(router)
 
     asyncio.create_task(schedule_notifications_loop(bot))
 

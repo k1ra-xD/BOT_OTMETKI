@@ -1,4 +1,5 @@
 import asyncio
+from aiogram.fsm.state import default_state
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from drive_helper import upload_file_to_subject
@@ -12,11 +13,8 @@ drive_router.message.middleware(BannedMiddleware())
 pending_batches = {}  # {user_id: {'files': [...], 'task': asyncio_task}}
 single_pending_files = {} # для одиночных файлов
 
-@drive_router.message(F.document | F.photo)
+@drive_router.message(default_state, F.from_user.id == ADMIN_ID, F.document | F.photo)
 async def handle_incoming_files(message: Message, bot: Bot):
-    if message.from_user.id != ADMIN_ID:
-        return
-
     user_id = message.from_user.id
 
     # Извлекаем файл
@@ -44,7 +42,6 @@ async def handle_incoming_files(message: Message, bot: Bot):
         pending_batches[user_id]['timer_task'].cancel()
 
     async def send_album_prompt():
-        # Увеличили задержку до 1.5 секунд, чтобы Telegram успел прислать все части тяжелой пачки
         await asyncio.sleep(1.5) 
         if user_id in pending_batches:
             data = pending_batches.pop(user_id)
