@@ -36,7 +36,8 @@ async def schedule_notifications_loop(bot: Bot):
                         if first_key not in notified_lessons:
                             notified_lessons.add(first_key)
                             
-                            online_link = first_lesson.get('online_link')
+                            lesson_dict = dict(first_lesson)
+                            online_link = lesson_dict.get('online_link')
                             link_text = f"\n🔗 <b>Ссылка на занятие:</b> {online_link}" if online_link else ""
 
                             text_first = (
@@ -75,7 +76,8 @@ async def schedule_notifications_loop(bot: Bot):
                             if lesson_id_key not in notified_lessons:
                                 notified_lessons.add(lesson_id_key)
                                 
-                                online_link = lesson.get('online_link')
+                                l_dict = dict(lesson)
+                                online_link = l_dict.get('online_link')
                                 link_text = f"\n🔗 <b>Ссылка на занятие:</b> {online_link}" if online_link else ""
 
                                 text = (

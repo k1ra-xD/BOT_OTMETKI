@@ -25,10 +25,10 @@ def get_or_create_subfolder(service, folder_name: str, parent_id: str) -> str:
     folder = service.files().create(body=folder_metadata, fields='id').execute()
     return folder.get('id')
 
-def upload_sro_file(file_bytes: bytes, filename: str, student_name: str, subject_name: str) -> str:
+def upload_sro_file(file_bytes: bytes, filename: str, student_name: str, subject_name: str, sro_num: str = "СРО 1") -> str:
     """
     Загружает файл в структуру:
-    [Лекции] -> [СРО] -> [ФИО Студента] -> [Предмет] -> [Файл]
+    [Лекции] -> [СРО] -> [ФИО Студента] -> [Предмет] -> [СРО X] -> [Файл]
     """
     service = get_drive_service()
 
@@ -41,13 +41,16 @@ def upload_sro_file(file_bytes: bytes, filename: str, student_name: str, subject
     # 3. Папка предмета внутри папки студента
     subject_folder_id = get_or_create_subfolder(service, subject_name, student_folder_id)
 
-    # 4. Загрузка файла
+    # 4. Папка конкретного задания (СРО 1, СРО 2 и т.д.)
+    sro_folder_id = get_or_create_subfolder(service, sro_num, subject_folder_id)
+
+    # 5. Загрузка файла
     fh = io.BytesIO(file_bytes)
     media = MediaIoBaseUpload(fh, mimetype='application/octet-stream', resumable=True)
 
     file_metadata = {
         'name': filename,
-        'parents': [subject_folder_id]
+        'parents': [sro_folder_id]
     }
 
     uploaded_file = service.files().create(

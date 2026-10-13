@@ -13,6 +13,8 @@ sro_router.callback_query.middleware(BannedMiddleware())
 
 class SroStates(StatesGroup):
     waiting_for_subject = State()
+    waiting_for_sro_num = State()
+    waiting_for_custom_num = State()
     waiting_for_files = State()
 
 # Буфер для приема файлов/пачек от студентов
@@ -66,12 +68,13 @@ async def start_sro_submission(message: Message, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(
         f"👤 <b>Студент:</b> {student_name}\n"
-        f"📖 Выберите предмет, по которому вы хотите сдать СРО/лабораторную:",
+        f"📖 Выберите предмет, по которому вы хотите сдать СРО:",
         reply_markup=kb,
         parse_mode="HTML"
     )
 
-@sro_router.callback_query(SroStates.waiting_for_subject, F.data == "sro_cancel")
+# Универсальная отмена для любых состояний
+@sro_router.callback_query(F.data == "sro_cancel")
 async def cancel_sro(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text("❌ Сдача СРО отменена.")
@@ -85,12 +88,80 @@ async def process_subject_chosen(callback: CallbackQuery, state: FSMContext):
     selected_subject = subject_map.get(subj_key, "Общее")
 
     await state.update_data(selected_subject=selected_subject)
+    await state.set_state(SroStates.waiting_for_sro_num)
+
+    # Компактная сетка СРО 1 - СРО 10 (по 2 в ряд)
+    grid_buttons = []
+    row = []
+    for num in range(1, 11):
+        row.append(InlineKeyboardButton(text=f"СРО {num}", callback_data=f"sro_num:СРО {num}"))
+        if len(row) == 2:
+            grid_buttons.append(row)
+            row = []
+    if row:
+        grid_buttons.append(row)
+
+    grid_buttons.append([InlineKeyboardButton(text="✏️ Ввести другой номер / тему", callback_data="sro_num:manual")])
+    grid_buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="sro_cancel")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=grid_buttons)
+    await callback.message.edit_text(
+        f"✅ <b>Предмет:</b> {selected_subject}\n\n"
+        f"🔢 <b>Выберите номер СРО или укажите свой:</b>",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@sro_router.callback_query(SroStates.waiting_for_sro_num, F.data == "sro_num:manual")
+async def ask_manual_sro_num(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(SroStates.waiting_for_custom_num)
+    await callback.message.edit_text(
+        "✏️ <b>Введите номер или название работы:</b>\n\n"
+        "<i>Например: <code>12</code>, <code>Лабораторная 3</code> или <code>Курсовая</code></i>\n\n"
+        "Для отмены отправьте /cancel",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@sro_router.message(SroStates.waiting_for_custom_num, F.text)
+async def process_manual_sro_input(message: Message, state: FSMContext):
+    if message.text == "/cancel":
+        await state.clear()
+        return await message.answer("❌ Загрузка отменена.")
+
+    text = message.text.strip()
+    sro_num = f"СРО {text}" if text.isdigit() else text
+
+    await state.update_data(sro_num=sro_num)
+    await state.set_state(SroStates.waiting_for_files)
+
+    data = await state.get_data()
+    selected_subject = data.get('selected_subject', "Общее")
+
+    await message.answer(
+        f"📖 <b>Предмет:</b> {selected_subject}\n"
+        f"📑 <b>Раздел:</b> {sro_num}\n\n"
+        f"📎 Теперь отправьте <b>файл или несколько файлов</b>.\n"
+        f"<i>Бот создаст папку «{sro_num}» на Диске и сохранит работы туда.</i>\n\n"
+        f"Для отмены отправьте /cancel",
+        parse_mode="HTML"
+    )
+
+@sro_router.callback_query(SroStates.waiting_for_sro_num, F.data.startswith("sro_num:"))
+async def process_sro_num_chosen(callback: CallbackQuery, state: FSMContext):
+    sro_num = callback.data.split(":", 1)[1]
+    data = await state.get_data()
+    selected_subject = data.get('selected_subject', "Общее")
+
+    await state.update_data(sro_num=sro_num)
     await state.set_state(SroStates.waiting_for_files)
 
     await callback.message.edit_text(
-        f"✅ <b>Предмет выбран:</b> {selected_subject}\n\n"
-        f"📎 Теперь отправьте <b>файл или несколько файлов</b> (документы Word, PDF, фото, архив).\n"
-        f"<i>После отправки бот автоматически загрузит их в вашу папку на Диске.</i>\n\n"
+        f"📖 <b>Предмет:</b> {selected_subject}\n"
+        f"📑 <b>Раздел:</b> {sro_num}\n\n"
+        f"📎 Отправьте <b>один или несколько файлов</b> (Word, PDF, архивы, фото).\n"
+        f"<i>Бот автоматически сложит их в папку «{sro_num}» на Google Диске.</i>\n\n"
         f"Для отмены отправьте /cancel",
         parse_mode="HTML"
     )
@@ -107,6 +178,7 @@ async def handle_sro_files(message: Message, state: FSMContext, bot: Bot):
     state_data = await state.get_data()
     student_name = state_data.get('student_name', f"Студент_{user_id}")
     selected_subject = state_data.get('selected_subject', "Общее")
+    sro_num = state_data.get('sro_num', "СРО 1")
 
     # Извлечение файла
     if message.document:
@@ -126,12 +198,11 @@ async def handle_sro_files(message: Message, state: FSMContext, bot: Bot):
 
     pending_sro_batches[user_id]['files'].append(file_info)
 
-    # Сбрасываем таймер ожидания пачки
+    # Перезапуск таймера ожидания пачки
     if 'timer_task' in pending_sro_batches[user_id] and pending_sro_batches[user_id]['timer_task']:
         pending_sro_batches[user_id]['timer_task'].cancel()
 
     async def execute_upload():
-        # Ждем 1.5 сек, пока прилетят все файлы из альбома
         await asyncio.sleep(1.5)
         if user_id in pending_sro_batches:
             batch = pending_sro_batches.pop(user_id)
@@ -140,7 +211,7 @@ async def handle_sro_files(message: Message, state: FSMContext, bot: Bot):
 
             status_msg = await bot.send_message(
                 batch['chat_id'],
-                f"⏳ Получено файлов: <b>{total}</b>. Начинаю загрузку на Google Диск...",
+                f"⏳ Получено файлов: <b>{total}</b>. Начинаю загрузку в папку <b>{sro_num}</b>...",
                 parse_mode="HTML"
             )
 
@@ -159,18 +230,20 @@ async def handle_sro_files(message: Message, state: FSMContext, bot: Bot):
                         file_bytes=downloaded_file.getvalue(),
                         filename=f_item['file_name'],
                         student_name=student_name,
-                        subject_name=selected_subject
+                        subject_name=selected_subject,
+                        sro_num=sro_num
                     )
                     success_count += 1
                 except Exception as e:
                     print(f"Ошибка загрузки СРО: {e}")
 
             await status_msg.edit_text(
-                f"🎉 <b>СРО успешно сдано!</b>\n\n"
+                f"🎉 <b>Работа успешно сдана!</b>\n\n"
                 f"👤 <b>Студент:</b> {student_name}\n"
                 f"📖 <b>Предмет:</b> {selected_subject}\n"
+                f"📑 <b>Раздел:</b> {sro_num}\n"
                 f"📂 <b>Загружено файлов:</b> {success_count} из {total}\n\n"
-                f"<i>Все файлы сохранены в папку СРО на Диске.</i>",
+                f"<i>Все файлы сохранены в папку «{sro_num}» на Google Диске.</i>",
                 parse_mode="HTML"
             )
             await state.clear()
