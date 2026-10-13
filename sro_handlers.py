@@ -39,8 +39,6 @@ async def start_sro_submission(message: Message, state: FSMContext):
         return await message.answer(
             "⚠️ Вы ещё не зарегистрированы в боте. Отправьте команду /start и введите своё Имя и Фамилию."
         )
-    else:
-        student_name = row['full_name']
 
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT DISTINCT subject FROM schedule WHERE subject IS NOT NULL AND subject != '' ORDER BY subject ASC")
@@ -150,7 +148,6 @@ async def process_subject_chosen(callback: CallbackQuery, state: FSMContext):
             parse_mode="HTML"
         )
     else:
-        # Если папок еще нет — открываем выбор нового номера
         await render_new_sro_grid(callback, selected_subject, state)
 
     await callback.answer()
