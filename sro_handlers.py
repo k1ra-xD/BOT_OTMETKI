@@ -281,6 +281,8 @@ async def handle_sro_files(message: Message, state: FSMContext, bot: Bot):
             )
 
             success_count = 0
+            error_details = ""
+
             for idx, f_item in enumerate(files, 1):
                 try:
                     await status_msg.edit_text(
@@ -300,16 +302,24 @@ async def handle_sro_files(message: Message, state: FSMContext, bot: Bot):
                     )
                     success_count += 1
                 except Exception as e:
+                    error_details = str(e)
                     print(f"Ошибка загрузки СРО: {e}")
 
-            await status_msg.edit_text(
-                f"🎉 <b>Файлы успешно сохранены!</b>\n\n"
-                f"👤 <b>Студент:</b> {student_name}\n"
-                f"📖 <b>Предмет:</b> {selected_subject}\n"
-                f"📂 <b>Папка:</b> <code>{sro_num}</code>\n"
-                f"📊 <b>Загружено файлов:</b> {success_count} из {total}",
-                parse_mode="HTML"
-            )
+            if success_count > 0:
+                await status_msg.edit_text(
+                    f"🎉 <b>Файлы успешно сохранены!</b>\n\n"
+                    f"👤 <b>Студент:</b> {student_name}\n"
+                    f"📖 <b>Предмет:</b> {selected_subject}\n"
+                    f"📂 <b>Папка:</b> <code>{sro_num}</code>\n"
+                    f"📊 <b>Загружено файлов:</b> {success_count} из {total}",
+                    parse_mode="HTML"
+                )
+            else:
+                await status_msg.edit_text(
+                    f"❌ <b>Файлы не загрузились!</b>\n\n"
+                    f"⚠️ <b>Ошибка Google Drive:</b>\n<code>{error_details}</code>",
+                    parse_mode="HTML"
+                )
             await state.clear()
 
     pending_sro_batches[user_id]['timer_task'] = asyncio.create_task(execute_upload())
