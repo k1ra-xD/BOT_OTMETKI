@@ -18,6 +18,9 @@ from config import ADMIN_ID, DEFAULT_RADIUS, DEFAULT_UNI_LAT, DEFAULT_UNI_LON, D
 from db import get_setting, set_setting
 from parser import download_schedule_file, parse_excel_schedule
 
+class BroadcastStates(StatesGroup):
+    waiting_for_custom_text = State()
+
 router = Router()
 
 class RegStates(StatesGroup):
@@ -112,7 +115,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     except Exception as e:
         logging.error(f"Ошибка меню кнопки: {e}")
 
-    # Очищенная панель Администратора
+    # Панель Администратора
     if message.from_user.id == ADMIN_ID:
         pool = get_db_pool()
         radius = await get_setting(pool, 'radius', DEFAULT_RADIUS)
@@ -124,6 +127,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 [KeyboardButton(text="🎯 Установить центр ВУЗа"), KeyboardButton(text="⚙️ Изменить радиус зоны")],
                 [KeyboardButton(text="👥 Список студентов"), KeyboardButton(text="🗑 Удалить студента")],
                 [KeyboardButton(text="🚫 Блокировать ID"), KeyboardButton(text="✅ Разблокировать ID")],
+                [KeyboardButton(text="📤 Сдать СРО"), KeyboardButton(text="📢 Рассылка обновления")],
                 [KeyboardButton(text="📅 Расписание")]
             ],
             resize_keyboard=True
@@ -326,7 +330,7 @@ async def process_new_schedule_text(message: Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
-# Обработка геопозиции от студентов и смена координат ВУЗа
+# Обработка геопозиции от студентов
 @router.message(F.location)
 async def handle_location(message: Message, state: FSMContext):
     try:
@@ -355,7 +359,6 @@ async def handle_location(message: Message, state: FSMContext):
         day_code = now.weekday()
 
         async with pool.acquire() as conn:
-            # Если человек ВНЕ ЗОНЫ, сохраняем попытку в БД
             if not is_inside:
                 await conn.execute("""
                     INSERT INTO attendance (telegram_id, subject, checkin_time, status, distance)
@@ -370,7 +373,6 @@ async def handle_location(message: Message, state: FSMContext):
                     reply_markup=student_main_kb
                 )
 
-            # Если человек В ЗОНЕ ВУЗа
             lessons = await conn.fetch("SELECT * FROM schedule WHERE day_of_week = $1 ORDER BY time_start ASC", day_code)
             
             current_lesson = None
@@ -509,4 +511,108 @@ async def show_lectures_link(message: Message):
         "Все загруженные лекции и файлы по предметам вы можете найти в общей папке:\n"
         "👉 [Открыть папку с лекциями на Google Диске](https://drive.google.com/drive/folders/1282un1P5x8Qk0tejGYAUjj-cPU_k1JxQ)",
         parse_mode="Markdown"
+    )
+
+DEFAULT_UPDATE_TEXT = (
+    "🚀 <b>Большое обновление бота: Сдача СРО и лабораторных!</b>\n\n"
+    "Теперь вы можете сдавать выполненные работы прямо через Telegram, а бот автоматически загрузит их на Google Диск по нужным папкам.\n\n"
+    "📌 <b>Как это работает:</b>\n"
+    "1️⃣ Нажмите кнопку <b>«📤 Сдать СРО»</b> в главном меню.\n"
+    "2️⃣ <b>Выберите предмет</b> из предложенного списка.\n"
+    "3️⃣ <b>Выберите номер СРО</b> (например, <i>СРО 1</i>, <i>СРО 2</i>) или нажмите <i>«Ввести другое название»</i>, чтобы создать папку с темой (например, <i>Лабораторная 3</i> или <i>Курсовая</i>).\n"
+    "4️⃣ <b>Отправьте файл или альбом файлов</b> (Word, PDF, фото, архив) — бот сохранит их на Диске.\n\n"
+    "🔄 <b>Дозагрузка файлов:</b>\n"
+    "Если вы забыли прикрепить файл или хотите дослать дополнение, просто выберите предмет ещё раз — бот покажет ваши созданные папки, и вы сможете отправить работу прямо в них без дублирования!\n\n"
+    "<i>Успешной учёбы! 🎓</i>"
+)
+
+# Меню рассылки
+@router.message(F.text == "📢 Рассылка обновления")
+async def start_broadcast_menu(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    preview_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Отправить готовый шаблон", callback_data="bc_send_default")],
+        [InlineKeyboardButton(text="✏️ Написать свой текст", callback_data="bc_write_custom")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="bc_cancel")]
+    ])
+
+    await message.answer(
+        f"📢 <b>Предпросмотр сообщения об обновлении:</b>\n\n"
+        f"----------------------------------------\n"
+        f"{DEFAULT_UPDATE_TEXT}\n"
+        f"----------------------------------------\n\n"
+        f"Отправить этот текст всем студентам или написать свой?",
+        reply_markup=preview_kb,
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data == "bc_cancel")
+async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("❌ Рассылка отменена.")
+    await callback.answer()
+
+@router.callback_query(F.data == "bc_write_custom")
+async def ask_custom_broadcast(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BroadcastStates.waiting_for_custom_text)
+    await callback.message.edit_text(
+        "✏️ Отправьте сообщение, которое хотите разослать всем студентам (поддерживается HTML-разметка).\n\n"
+        "Для отмены отправьте /cancel",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.message(BroadcastStates.waiting_for_custom_text, F.text == "/cancel")
+async def cancel_custom_broadcast(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Рассылка отменена.")
+
+@router.message(BroadcastStates.waiting_for_custom_text, F.text)
+async def process_custom_broadcast(message: Message, state: FSMContext, bot: Bot):
+    custom_text = message.text
+    await state.clear()
+    await run_broadcast(bot, message.chat.id, custom_text)
+
+@router.callback_query(F.data == "bc_send_default")
+async def send_default_broadcast(callback: CallbackQuery, bot: Bot):
+    await callback.message.edit_text("⏳ Запускаю рассылку обновления студентам...")
+    await callback.answer()
+    await run_broadcast(bot, callback.message.chat.id, DEFAULT_UPDATE_TEXT)
+
+async def run_broadcast(bot: Bot, admin_chat_id: int, text_to_send: str):
+    pool = get_db_pool()
+    if not pool:
+        return await bot.send_message(admin_chat_id, "⚠️ Ошибка подключения к базе данных.")
+
+    async with pool.acquire() as conn:
+        students = await conn.fetch("SELECT telegram_id, full_name FROM students")
+
+    if not students:
+        return await bot.send_message(admin_chat_id, "📁 В базе нет зарегистрированных студентов.")
+
+    success_count = 0
+    fail_count = 0
+
+    progress_msg = await bot.send_message(
+        admin_chat_id, 
+        f"📤 Рассылка запущена для <b>{len(students)}</b> студентов...", 
+        parse_mode="HTML"
+    )
+
+    for student in students:
+        try:
+            await bot.send_message(student['telegram_id'], text_to_send, parse_mode="HTML")
+            success_count += 1
+            await asyncio.sleep(0.05)  # Защита от лимитов Telegram API
+        except Exception:
+            fail_count += 1
+
+    await progress_msg.edit_text(
+        f"✅ <b>Рассылка завершена!</b>\n\n"
+        f"📊 <b>Результаты:</b>\n"
+        f"• Успешно доставлено: <b>{success_count}</b>\n"
+        f"• Не удалось доставить (заблокировали бота): <b>{fail_count}</b>",
+        parse_mode="HTML"
     )

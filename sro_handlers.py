@@ -1,4 +1,5 @@
 import asyncio
+from config import ADMIN_ID
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -26,15 +27,19 @@ async def start_sro_submission(message: Message, state: FSMContext):
     if not pool:
         return await message.answer("⚠️ Ошибка подключения к базе данных. Попробуйте позже.")
 
+    # Проверяем, зарегистрирован ли студент или это администратор
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", message.from_user.id)
 
     if not row:
-        return await message.answer(
-            "⚠️ Вы ещё не зарегистрированы в боте. Отправьте команду /start и введите своё Имя и Фамилию."
-        )
-
-    student_name = row['full_name']
+        if message.from_user.id == ADMIN_ID:
+            student_name = "Администратор"
+        else:
+            return await message.answer(
+                "⚠️ Вы ещё не зарегистрированы в боте. Отправьте команду /start и введите своё Имя и Фамилию."
+            )
+    else:
+        student_name = row['full_name']
 
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT DISTINCT subject FROM schedule WHERE subject IS NOT NULL AND subject != '' ORDER BY subject ASC")
