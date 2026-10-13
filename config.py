@@ -4,6 +4,7 @@ from datetime import timezone, timedelta
 TOKEN = os.environ.get("BOT_TOKEN", "8932791447:AAGB5HfDMv1Jq7yMwVwko9YVl7rubu7F3tM")
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres.stduhsqtkysawtahgftq:7htTw1GOgUV7XXb2@aws-0-eu-west-1.pooler.supabase.com:6543/postgres")
 ADMIN_ID = 1231388093
+ADMIN_NAME = "Кирович Георгий"
 
 SCHEDULE_PAGE_URL = "https://esil.edu.kz/students_schedule/"
 LOCAL_FILE_NAME = "target_schedule.xlsx"

@@ -1,5 +1,5 @@
 import asyncio
-from config import ADMIN_ID
+from config import ADMIN_ID, ADMIN_NAME
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -27,17 +27,18 @@ async def start_sro_submission(message: Message, state: FSMContext):
     if not pool:
         return await message.answer("⚠️ Ошибка подключения к базе данных. Попробуйте позже.")
 
-    # Проверяем, зарегистрирован ли студент или это администратор
+    # Проверяем, зарегистрирован ли студент
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", message.from_user.id)
 
-    if not row:
-        if message.from_user.id == ADMIN_ID:
-            student_name = "Администратор"
-        else:
-            return await message.answer(
-                "⚠️ Вы ещё не зарегистрированы в боте. Отправьте команду /start и введите своё Имя и Фамилию."
-            )
+    if row:
+        student_name = row['full_name']
+    elif message.from_user.id == ADMIN_ID:
+        student_name = ADMIN_NAME  # Берет ваше Ф.И из config.py
+    else:
+        return await message.answer(
+            "⚠️ Вы ещё не зарегистрированы в боте. Отправьте команду /start и введите своё Имя и Фамилию."
+        )
     else:
         student_name = row['full_name']
 
