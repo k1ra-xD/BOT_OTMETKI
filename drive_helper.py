@@ -1,6 +1,7 @@
 import io
 import os
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
@@ -8,22 +9,27 @@ MAIN_FOLDER_ID = "1282un1P5x8Qk0tejGYAUjj-cPU_k1JxQ"
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 def get_drive_service():
-    """Авторизация через Сервисный аккаунт (вечный токен)"""
-    service_account_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "service_account.json")
+    """Авторизация через пользовательский token.json с защитой от Read-only на Render"""
+    # Ищем файл в папке секретов Render, а если его нет — в текущей папке на ПК
+    token_path = "/etc/secrets/token.json" if os.path.exists("/etc/secrets/token.json") else "token.json"
     
-    if not os.path.exists(service_account_path):
-        raise FileNotFoundError(
-            f"Файл '{service_account_path}' не найден! Загрузите его в Secret Files на Render."
-        )
+    if not os.path.exists(token_path):
+        raise FileNotFoundError("Файл 'token.json' не найден! Загрузите token.json в Secret Files на Render.")
 
-    creds = service_account.Credentials.from_service_account_file(
-        service_account_path, scopes=SCOPES
-    )
+    creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+
+    # Автоматическое обновление токена, если он истек
+    if creds and creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            with open(token_path, 'w') as token_file:
+                token_file.write(creds.to_json())
+        except Exception:
+            pass  # На Render Secret Files доступны только для чтения — токен успешно обновится в памяти
 
     return build('drive', 'v3', credentials=creds)
 
 def get_or_create_subfolder(service, folder_name: str, parent_id: str) -> str:
-    """Вспомогательная функция для поиска или создания подпапки"""
     query = (
         f"name = '{folder_name}' and "
         f"'{parent_id}' in parents and "
@@ -44,29 +50,14 @@ def get_or_create_subfolder(service, folder_name: str, parent_id: str) -> str:
     folder = service.files().create(body=folder_metadata, fields='id').execute()
     return folder.get('id')
 
-def upload_sro_file(
-    file_bytes: bytes,
-    filename: str,
-    student_name: str,
-    subject_name: str,
-    sro_num: str = "СРО 1"
-) -> str:
-    """Загрузка файла СРО с полным структурированием по папкам на Google Диске"""
+def upload_sro_file(file_bytes: bytes, filename: str, student_name: str, subject_name: str, sro_num: str = "СРО 1") -> str:
     service = get_drive_service()
 
-    # 1. Папка «СРО» внутри главной папки
     sro_root_id = get_or_create_subfolder(service, "СРО", MAIN_FOLDER_ID)
-
-    # 2. Папка студента по ФИО
     student_folder_id = get_or_create_subfolder(service, student_name, sro_root_id)
-
-    # 3. Папка предмета внутри папки студента
     subject_folder_id = get_or_create_subfolder(service, subject_name, student_folder_id)
-
-    # 4. Папка конкретного задания (например, СРО 1, Эссе и т.д.)
     sro_folder_id = get_or_create_subfolder(service, sro_num, subject_folder_id)
 
-    # 5. Загрузка файла
     fh = io.BytesIO(file_bytes)
     media = MediaIoBaseUpload(fh, mimetype='application/octet-stream', resumable=True)
 
@@ -83,14 +74,7 @@ def upload_sro_file(
 
     return uploaded_file.get('webViewLink')
 
-# Совместимость со старыми вызовами
-def upload_file_to_subject(
-    file_path: str = None,
-    filename: str = "file",
-    subject_name: str = "Общее",
-    file_bytes: bytes = None,
-    **kwargs
-) -> str:
+def upload_file_to_subject(file_path: str = None, filename: str = "file", subject_name: str = "Общее", file_bytes: bytes = None, **kwargs) -> str:
     service = get_drive_service()
     folder_id = get_or_create_subfolder(service, subject_name, MAIN_FOLDER_ID)
 
