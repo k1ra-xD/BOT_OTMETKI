@@ -1,7 +1,6 @@
 import io
 import os
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
@@ -9,25 +8,17 @@ MAIN_FOLDER_ID = "1282un1P5x8Qk0tejGYAUjj-cPU_k1JxQ"
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 def get_drive_service():
-    """Авторизация через пользовательский token.json с защитой от Read-only на Render"""
-    token_path = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
+    """Авторизация через Сервисный аккаунт (вечный токен)"""
+    service_account_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "service_account.json")
     
-    if not os.path.exists(token_path):
+    if not os.path.exists(service_account_path):
         raise FileNotFoundError(
-            f"Файл '{token_path}' не найден! Загрузите token.json в Secret Files на Render."
+            f"Файл '{service_account_path}' не найден! Загрузите его в Secret Files на Render."
         )
 
-    creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-
-    # Автоматическое обновление токена, если он истек
-    if creds and creds.expired and creds.refresh_token:
-        try:
-            creds.refresh(Request())
-            # Пытаемся обновить файл на диске (на локальном ПК сработает, на Render уйдет в except)
-            with open(token_path, 'w') as token_file:
-                token_file.write(creds.to_json())
-        except Exception:
-            pass  # На Render Secret Files доступны только для чтения — токен успешно обновился в памяти
+    creds = service_account.Credentials.from_service_account_file(
+        service_account_path, scopes=SCOPES
+    )
 
     return build('drive', 'v3', credentials=creds)
 
