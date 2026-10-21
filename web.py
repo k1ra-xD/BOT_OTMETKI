@@ -10,6 +10,7 @@ DASHBOARD_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Дашборд Посещаемости</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --bg-color: var(--tg-theme-bg-color, #0f172a);
@@ -123,7 +124,8 @@ DASHBOARD_HTML = """
             background: rgba(0, 0, 0, 0.15);
             border-radius: 10px;
             padding: 3px;
-            margin-bottom: 12px;
+            margin-bottom: 14px;
+            gap: 2px;
         }
 
         .tab-btn {
@@ -132,12 +134,13 @@ DASHBOARD_HTML = """
             background: none;
             border: none;
             padding: 8px 4px;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
             cursor: pointer;
             color: var(--hint-color);
             border-radius: 8px;
             transition: all 0.2s ease;
+            white-space: nowrap;
         }
 
         .tab-btn.active {
@@ -180,6 +183,7 @@ DASHBOARD_HTML = """
             display: flex;
             flex-direction: column;
             gap: 3px;
+            width: 100%;
         }
 
         .student-name {
@@ -202,6 +206,7 @@ DASHBOARD_HTML = """
             padding: 3px 8px;
             border-radius: 6px;
             white-space: nowrap;
+            margin-left: 8px;
         }
 
         .badge {
@@ -211,6 +216,7 @@ DASHBOARD_HTML = """
             font-size: 10px;
             font-weight: 700;
             letter-spacing: 0.2px;
+            white-space: nowrap;
         }
 
         .badge-success { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
@@ -223,6 +229,66 @@ DASHBOARD_HTML = """
             color: var(--hint-color);
             padding: 24px 0;
             font-size: 13px;
+        }
+
+        /* Стили для вкладки Аналитика */
+        .analytics-block {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 14px;
+        }
+
+        .analytics-block:last-child {
+            margin-bottom: 0;
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .chart-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text-color);
+            margin: 0;
+        }
+
+        .chart-subtitle {
+            font-size: 11px;
+            color: var(--hint-color);
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: 190px;
+            width: 100%;
+        }
+
+        .chart-wrapper-small {
+            position: relative;
+            height: 160px;
+            width: 100%;
+        }
+
+        .progress-bar-bg {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3b82f6, #4ade80);
+            border-radius: 4px;
+            transition: width 0.4s ease;
         }
     </style>
 </head>
@@ -252,8 +318,9 @@ DASHBOARD_HTML = """
 
     <div class="card">
         <div class="tabs">
-            <button id="tab-present" class="tab-btn active" onclick="switchTab('present')">📍 Отметились (<span id="tab-present-num">0</span>)</button>
-            <button id="tab-absent" class="tab-btn" onclick="switchTab('absent')">🚫 Прогуливают (<span id="tab-absent-num">0</span>)</button>
+            <button id="tab-present" class="tab-btn active" onclick="switchTab('present')">📍 Сегодня (<span id="tab-present-num">0</span>)</button>
+            <button id="tab-absent" class="tab-btn" onclick="switchTab('absent')">🚫 Прогулы (<span id="tab-absent-num">0</span>)</button>
+            <button id="tab-analytics" class="tab-btn" onclick="switchTab('analytics')">📈 Аналитика</button>
         </div>
 
         <div id="filter-wrapper" style="display:block;">
@@ -269,6 +336,49 @@ DASHBOARD_HTML = """
         <div id="absent-container" style="display:none;">
             <ul id="absent-list"><li><i>Загрузка данных...</i></li></ul>
         </div>
+
+        <!-- Контейнер Аналитики за 30 дней -->
+        <div id="analytics-container" style="display:none;">
+            <div class="analytics-block">
+                <div class="chart-header">
+                    <h3 class="chart-title">📅 Динамика за 30 дней</h3>
+                    <span class="chart-subtitle">Уникальные студенты</span>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="dailyChart"></canvas>
+                </div>
+            </div>
+
+            <div class="analytics-block">
+                <div class="chart-header">
+                    <h3 class="chart-title">⏱ Дисциплина (Статусы)</h3>
+                    <span class="chart-subtitle">За месяц</span>
+                </div>
+                <div class="chart-wrapper-small">
+                    <canvas id="statusChart"></canvas>
+                </div>
+            </div>
+
+            <div class="analytics-block">
+                <div class="chart-header">
+                    <h3 class="chart-title">📚 Активность по предметам</h3>
+                    <span class="chart-subtitle">Топ дисциплин</span>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="subjectsChart"></canvas>
+                </div>
+            </div>
+
+            <div class="analytics-block">
+                <div class="chart-header">
+                    <h3 class="chart-title">🏆 Рейтинг студентов (30 дней)</h3>
+                    <span class="chart-subtitle">Дней с отметкой</span>
+                </div>
+                <ul id="top-students-list">
+                    <li><i>Загрузка аналитики...</i></li>
+                </ul>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -278,15 +388,26 @@ DASHBOARD_HTML = """
 
         let allData = { responses: [], absent: [], subjects: [] };
         let activeTab = 'present';
+        let dailyChartInstance = null;
+        let statusChartInstance = null;
+        let subjectsChartInstance = null;
 
         function switchTab(tab) {
             activeTab = tab;
             document.getElementById('tab-present').className = 'tab-btn' + (tab === 'present' ? ' active' : '');
             document.getElementById('tab-absent').className = 'tab-btn' + (tab === 'absent' ? ' active' : '');
+            document.getElementById('tab-analytics').className = 'tab-btn' + (tab === 'analytics' ? ' active' : '');
+            
             document.getElementById('present-container').style.display = tab === 'present' ? 'block' : 'none';
             document.getElementById('absent-container').style.display = tab === 'absent' ? 'block' : 'none';
+            document.getElementById('analytics-container').style.display = tab === 'analytics' ? 'block' : 'none';
             document.getElementById('filter-wrapper').style.display = tab === 'present' ? 'block' : 'none';
-            renderLists();
+            
+            if (tab === 'analytics') {
+                loadAnalytics();
+            } else {
+                renderLists();
+            }
         }
 
         function getStatusBadgeClass(status) {
@@ -377,9 +498,153 @@ DASHBOARD_HTML = """
                 document.getElementById('tab-present-num').innerText = data.present_count || 0;
                 document.getElementById('tab-absent-num').innerText = data.absent_count || 0;
                 
-                renderLists();
+                if (activeTab !== 'analytics') {
+                    renderLists();
+                }
             } catch(e) { 
                 console.error(e); 
+            }
+        }
+
+        async function loadAnalytics() {
+            try {
+                const res = await fetch('/api/analytics');
+                const data = await res.json();
+                renderAnalyticsCharts(data);
+            } catch(e) {
+                console.error("Ошибка загрузки аналитики:", e);
+            }
+        }
+
+        function renderAnalyticsCharts(data) {
+            const textColor = getComputedStyle(document.documentElement).getPropertyValue('--hint-color').trim() || '#94a3b8';
+            const gridColor = 'rgba(255, 255, 255, 0.05)';
+
+            // 1. График по дням (Line Chart)
+            const dailyCtx = document.getElementById('dailyChart').getContext('2d');
+            if (dailyChartInstance) dailyChartInstance.destroy();
+
+            const gradient = dailyCtx.createLinearGradient(0, 0, 0, 180);
+            gradient.addColorStop(0, 'rgba(59, 130, 246, 0.4)');
+            gradient.addColorStop(1, 'rgba(59, 130, 246, 0.0)');
+
+            dailyChartInstance = new Chart(dailyCtx, {
+                type: 'line',
+                data: {
+                    labels: data.daily.labels,
+                    datasets: [
+                        {
+                            label: 'Студентов',
+                            data: data.daily.unique_students,
+                            borderColor: '#3b82f6',
+                            backgroundColor: gradient,
+                            borderWidth: 2.5,
+                            pointBackgroundColor: '#60a5fa',
+                            pointRadius: 3,
+                            fill: true,
+                            tension: 0.35
+                        },
+                        {
+                            label: 'Всего отметок',
+                            data: data.daily.total_checkins,
+                            borderColor: '#4ade80',
+                            borderWidth: 1.5,
+                            borderDash: [4, 4],
+                            pointRadius: 2,
+                            fill: false,
+                            tension: 0.35
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { labels: { color: textColor, font: { size: 11 } } }
+                    },
+                    scales: {
+                        x: { ticks: { color: textColor, font: { size: 10 } }, grid: { display: false } },
+                        y: { beginAtZero: true, ticks: { color: textColor, stepSize: 1, font: { size: 10 } }, grid: { color: gridColor } }
+                    }
+                }
+            });
+
+            // 2. График статусов (Doughnut Chart)
+            const statusCtx = document.getElementById('statusChart').getContext('2d');
+            if (statusChartInstance) statusChartInstance.destroy();
+
+            statusChartInstance = new Chart(statusCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: data.statuses.labels,
+                    datasets: [{
+                        data: data.statuses.counts,
+                        backgroundColor: ['#4ade80', '#facc15', '#f87171', '#60a5fa'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '65%',
+                    plugins: {
+                        legend: { position: 'right', labels: { color: textColor, font: { size: 11 }, boxWidth: 12 } }
+                    }
+                }
+            });
+
+            // 3. График по предметам (Horizontal Bar Chart)
+            const subjCtx = document.getElementById('subjectsChart').getContext('2d');
+            if (subjectsChartInstance) subjectsChartInstance.destroy();
+
+            subjectsChartInstance = new Chart(subjCtx, {
+                type: 'bar',
+                data: {
+                    labels: data.subjects.labels,
+                    datasets: [{
+                        label: 'Отметок',
+                        data: data.subjects.counts,
+                        backgroundColor: 'rgba(96, 165, 250, 0.75)',
+                        borderRadius: 6
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { beginAtZero: true, ticks: { color: textColor, font: { size: 10 } }, grid: { color: gridColor } },
+                        y: { ticks: { color: textColor, font: { size: 10 } }, grid: { display: false } }
+                    }
+                }
+            });
+
+            // 4. Рейтинг студентов
+            const topList = document.getElementById('top-students-list');
+            topList.innerHTML = '';
+            const maxDays = data.max_active_days || 1;
+
+            if (data.students_ranking && data.students_ranking.length > 0) {
+                data.students_ranking.forEach((st, idx) => {
+                    const percent = Math.min(100, Math.round((st.days_present / maxDays) * 100));
+                    const medal = idx === 0 ? '🥇' : (idx === 1 ? '🥈' : (idx === 2 ? '🥉' : '👤'));
+                    const li = document.createElement('li');
+                    li.innerHTML = `
+                        <div class="student-info">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <span class="student-name">${medal} ${st.name}</span>
+                                <span class="badge badge-info">${st.days_present} дн. (${st.total_checkins} отм.)</span>
+                            </div>
+                            <div class="progress-bar-bg">
+                                <div class="progress-bar-fill" style="width: ${percent}%;"></div>
+                            </div>
+                        </div>
+                    `;
+                    topList.appendChild(li);
+                });
+            } else {
+                topList.innerHTML = '<div class="empty-box">Нет данных за последние 30 дней</div>';
             }
         }
 
@@ -458,6 +723,101 @@ def create_web_app(get_db_pool, current_session=None):
             "subjects": sorted(list(subjects_today))
         })
 
+    async def handle_api_analytics(request):
+        db_pool = get_db_pool()
+        if not db_pool:
+            return web.json_response({"error": "No DB connection"}, status=500)
+
+        now = datetime.now(ASTANA_TZ)
+        month_ago = datetime(now.year, now.month, now.day) - timedelta(days=29)
+
+        async with db_pool.acquire() as conn:
+            # 1. Динамика по дням за последние 30 дней
+            daily_rows = await conn.fetch("""
+                SELECT 
+                    TO_CHAR(checkin_time, 'DD.MM') AS day_label,
+                    DATE(checkin_time) AS dt,
+                    COUNT(DISTINCT telegram_id) AS unique_students,
+                    COUNT(*) AS total_checkins
+                FROM attendance
+                WHERE checkin_time >= $1
+                GROUP BY dt, day_label
+                ORDER BY dt ASC
+            """, month_ago)
+
+            # 2. Статистика по предметам (Топ-7)
+            subject_rows = await conn.fetch("""
+                SELECT 
+                    COALESCE(NULLIF(subject, ''), 'Без предмета') AS subj,
+                    COUNT(*) AS cnt
+                FROM attendance
+                WHERE checkin_time >= $1
+                  AND subject NOT IN ('Вне пар', 'Вне зоны ВУЗа')
+                GROUP BY subj
+                ORDER BY cnt DESC
+                LIMIT 7
+            """, month_ago)
+
+            # 3. Распределение по статусам (Вовремя / Опоздание / Вне зоны)
+            status_rows = await conn.fetch("""
+                SELECT 
+                    CASE 
+                        WHEN status ILIKE '%Вовремя%' THEN 'Вовремя'
+                        WHEN status ILIKE '%Опоздание%' THEN 'Опоздание'
+                        WHEN status ILIKE '%Вне зоны%' THEN 'Вне зоны'
+                        ELSE 'Другое'
+                    END AS st_group,
+                    COUNT(*) AS cnt
+                FROM attendance
+                WHERE checkin_time >= $1
+                GROUP BY st_group
+            """, month_ago)
+
+            # 4. Рейтинг посещаемости студентов за 30 дней
+            student_rows = await conn.fetch("""
+                SELECT 
+                    s.full_name AS name,
+                    COUNT(DISTINCT DATE(a.checkin_time)) AS days_present,
+                    COUNT(a.telegram_id) AS total_checkins
+                FROM students s
+                LEFT JOIN attendance a 
+                    ON s.telegram_id = a.telegram_id AND a.checkin_time >= $1
+                GROUP BY s.telegram_id, s.full_name
+                ORDER BY days_present DESC, total_checkins DESC, s.full_name ASC
+            """, month_ago)
+
+        status_order = ['Вовремя', 'Опоздание', 'Вне зоны', 'Другое']
+        status_map = {r['st_group']: r['cnt'] for r in status_rows}
+        status_labels = [s for s in status_order if status_map.get(s, 0) > 0]
+        status_counts = [status_map[s] for s in status_labels]
+
+        max_active_days = max([len(daily_rows), 1])
+
+        return web.json_response({
+            "daily": {
+                "labels": [r['day_label'] for r in daily_rows],
+                "unique_students": [r['unique_students'] for r in daily_rows],
+                "total_checkins": [r['total_checkins'] for r in daily_rows]
+            },
+            "subjects": {
+                "labels": [r['subj'] for r in subject_rows],
+                "counts": [r['cnt'] for r in subject_rows]
+            },
+            "statuses": {
+                "labels": status_labels,
+                "counts": status_counts
+            },
+            "students_ranking": [
+                {
+                    "name": r['name'],
+                    "days_present": r['days_present'],
+                    "total_checkins": r['total_checkins']
+                }
+                for r in student_rows
+            ],
+            "max_active_days": max_active_days
+        })
+
     async def handle_root(request):
         return web.Response(text="Bot is running! 🚀", content_type="text/plain", status=200)
 
@@ -465,4 +825,5 @@ def create_web_app(get_db_pool, current_session=None):
     app.router.add_get('/ping', handle_root)
     app.router.add_get('/dashboard', handle_dashboard)
     app.router.add_get('/api/stats', handle_api_stats)
+    app.router.add_get('/api/analytics', handle_api_analytics)
     return app
