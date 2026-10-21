@@ -643,7 +643,7 @@ async def admin_upload_schedule_excel(message: Message, bot: Bot):
         downloaded_file = await bot.download_file(tg_file.file_path)
         
         # Сохраняем как локальный файл расписания
-        with open(LOCAL_FILE_NAME, "wb`") as f: # обратите внимание: "wb"
+        with open(LOCAL_FILE_NAME, "wb") as f: # обратите внимание: "wb"
             f.write(downloaded_file.getvalue())
 
         # Парсим через parser.py
