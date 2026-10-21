@@ -1,4 +1,5 @@
 import re
+import urllib.parse
 import requests
 from bs4 import BeautifulSoup
 import openpyxl
@@ -50,36 +51,36 @@ def extract_lesson_details(raw_text: str):
 
     return subject, lesson_type, teacher, room
 
-import urllib.parse
-import requests
-from bs4 import BeautifulSoup
-
-# Прямой fallback-URL на случай динамического рендеринга страницы
-FALLBACK_SCHEDULE_URL = "https://esil.edu.kz/api/media/file/%2B%D0%A0%D0%B0%D1%81%D0%BF%D0%B8%D1%81%D0%B0%D0%BD%D0%B8%D0%B5_2%D0%BA-4%D0%B3%20%2B1%D0%BA3%D0%B3%2B1%D0%BA2%D0%B3%20009%20(1).xlsx"
+# Актуальная прямая ссылка на расписание 2 курса с сайта esil.edu.kz
+FALLBACK_SCHEDULE_URL = "https://esil.edu.kz/api/media/file/%2B%D0%A0%D0%B0%D1%81%D0%BF%D0%B8%D1%81%D0%B0%D0%BD%D0%B8%D0%B5_2%20%D0%BA%D1%83%D1%80%D1%81%202026-2027.xlsx"
 
 def download_schedule_file():
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://esil.edu.kz/"
     }
     target_url = None
 
     try:
-        res = requests.get(SCHEDULE_PAGE_URL, headers=headers, timeout=15)
+        session = requests.Session()
+        res = session.get(SCHEDULE_PAGE_URL, headers=headers, timeout=15)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            # Поиск ссылки по атрибутам href и декодированным именам файлов
             for link in soup.find_all('a', href=True):
                 href = link['href'].strip()
+                link_text = link.get_text().strip().lower()
                 decoded_href = urllib.parse.unquote(href).lower()
                 
-                if ("/api/media/file/" in href or ".xlsx" in decoded_href) and any(k in decoded_href for k in ["2к", "2_к", "2-к", "2 курс"]):
-                    target_url = href
-                    break
+                if ("/api/media/file/" in href or ".xlsx" in decoded_href):
+                    if any(k in link_text or k in decoded_href for k in ["2 курс", "2_курс", "2-к", "2к"]):
+                        target_url = href
+                        break
     except Exception as e:
         print(f"Ошибка при парсинге страницы: {e}")
 
-    # Если сайт использует pure JS рендеринг и ссылка не найдена в static HTML
     if not target_url:
         target_url = FALLBACK_SCHEDULE_URL
 
@@ -87,7 +88,10 @@ def download_schedule_file():
         target_url = "https://esil.edu.kz" + target_url
 
     print(f"Загрузка файла расписания: {target_url}")
-    f_res = requests.get(target_url, headers=headers, timeout=30)
+    
+    # Используем сессию с заголовками, чтобы обойти 403 ошибку
+    session = requests.Session()
+    f_res = session.get(target_url, headers=headers, timeout=30)
     f_res.raise_for_status()
 
     with open(LOCAL_FILE_NAME, "wb") as f:
