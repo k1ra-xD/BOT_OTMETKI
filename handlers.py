@@ -632,3 +632,41 @@ async def run_broadcast(bot: Bot, admin_chat_id: int, text_to_send: str):
         f"• Не удалось доставить (заблокировали бота): <b>{fail_count}</b>",
         parse_mode="HTML"
     )
+    
+# Загрузка расписания через Excel-файл напрямую от админа (обход блокировки 403)
+@router.message(F.from_user.id == ADMIN_ID, F.document)
+async def admin_upload_schedule_excel(message: Message, bot: Bot):
+    file_name = message.document.file_name or ""
+    if not file_name.endswith('.xlsx'):
+        return  # Если это не Excel-файл, пропускаем
+
+    status_msg = await message.answer("⏳ Скачиваю и обрабатываю файл расписания...")
+    
+    try:
+        tg_file = await bot.get_file(message.document.file_id)
+        downloaded_file = await bot.download_file(tg_file.file_path)
+        
+        # Сохраняем как локальный файл расписания
+        with open(LOCAL_FILE_NAME, "wb") as f:
+            f.write(downloaded_file.getvalue())
+
+        # Парсим через parser.py
+        parsed_lessons = await asyncio.to_thread(parse_excel_schedule)
+
+        async with get_db_pool().acquire() as conn:
+            await conn.execute("TRUNCATE TABLE schedule")
+            for item in parsed_lessons:
+                await conn.execute("""
+                    INSERT INTO schedule (day_of_week, time_start, time_end, subject, lesson_type, teacher, room)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """, *item)
+
+        summary = (
+            f"🎉 <b>Расписание успешно обновлено из файла!</b>\n\n"
+            f"👥 Группа: <code>{TARGET_GROUP}</code>\n"
+            f"📊 Всего предметов/пар: <b>{len(parsed_lessons)}</b>"
+        )
+        await status_msg.edit_text(summary, parse_mode="HTML")
+
+    except Exception as e:
+        await status_msg.edit_text(f"❌ <b>Ошибка при разборе файла:</b>\n<code>{e}</code>", parse_mode="HTML")
