@@ -14,7 +14,7 @@ from aiogram.types import (
     MenuButtonDefault, MenuButtonWebApp
 )
 
-from config import ADMIN_ID, DEFAULT_RADIUS, DEFAULT_UNI_LAT, DEFAULT_UNI_LON, DAYS_MAP, ASTANA_TZ, TARGET_GROUP
+from config import ADMIN_ID, DEFAULT_RADIUS, DEFAULT_UNI_LAT, DEFAULT_UNI_LON, DAYS_MAP, ASTANA_TZ, TARGET_GROUP, LOCAL_FILE_NAME
 from db import get_setting, set_setting
 from parser import download_schedule_file, parse_excel_schedule
 
