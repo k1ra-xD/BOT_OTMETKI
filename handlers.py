@@ -632,14 +632,10 @@ async def run_broadcast(bot: Bot, admin_chat_id: int, text_to_send: str):
         f"• Не удалось доставить (заблокировали бота): <b>{fail_count}</b>",
         parse_mode="HTML"
     )
-    
-# Загрузка расписания через Excel-файл напрямую от админа (обход блокировки 403)
-@router.message(F.from_user.id == ADMIN_ID, F.document)
-async def admin_upload_schedule_excel(message: Message, bot: Bot):
-    file_name = message.document.file_name or ""
-    if not file_name.endswith('.xlsx'):
-        return  # Если это не Excel-файл, пропускаем
 
+# Загрузка расписания через Excel-файл напрямую от админа (обход блокировки 403)
+@router.message(F.from_user.id == ADMIN_ID, F.document, F.document.file_name.lower().contains("распис"))
+async def admin_upload_schedule_excel(message: Message, bot: Bot):
     status_msg = await message.answer("⏳ Скачиваю и обрабатываю файл расписания...")
     
     try:
@@ -647,7 +643,7 @@ async def admin_upload_schedule_excel(message: Message, bot: Bot):
         downloaded_file = await bot.download_file(tg_file.file_path)
         
         # Сохраняем как локальный файл расписания
-        with open(LOCAL_FILE_NAME, "wb") as f:
+        with open(LOCAL_FILE_NAME, "wb`") as f: # обратите внимание: "wb"
             f.write(downloaded_file.getvalue())
 
         # Парсим через parser.py

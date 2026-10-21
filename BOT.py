@@ -149,8 +149,8 @@ async def main():
     dp.error.register(global_error_handler)
 
     dp.include_router(sro_router)
-    dp.include_router(drive_router)
-    dp.include_router(router)
+    dp.include_router(router)       # Сначала проверяем админские команды и расписание
+    dp.include_router(drive_router) # Затем всё остальное уходит на Google Диск
 
     asyncio.create_task(schedule_notifications_loop(bot))
 
