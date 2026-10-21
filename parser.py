@@ -55,7 +55,7 @@ import requests
 from bs4 import BeautifulSoup
 
 # Прямой fallback-URL на случай динамического рендеринга страницы
-FALLBACK_SCHEDULE_URL = "https://esil.edu.kz/api/media/file/%2B%D0%A0%D0%B0%D1%81%D0%BF%D0%B8%D1%81%D0%B0%D0%BD%D0%B8%D0%B5_2%D0%BA-4%D0%B3%20%2B1%D0%BA3%D0%B3%2B1%D0%BA2%D0%B3%20009-6.xlsx"
+FALLBACK_SCHEDULE_URL = "https://esil.edu.kz/api/media/file/%2B%D0%A0%D0%B0%D1%81%D0%BF%D0%B8%D1%81%D0%B0%D0%BD%D0%B8%D0%B5_2%D0%BA-4%D0%B3%20%2B1%D0%BA3%D0%B3%2B1%D0%BA2%D0%B3%20009%20(1).xlsx"
 
 def download_schedule_file():
     headers = {
