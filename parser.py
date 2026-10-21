@@ -63,39 +63,56 @@ def download_schedule_file():
     }
     target_url = None
 
+    session = requests.Session()
+    
     try:
-        session = requests.Session()
-        res = session.get(SCHEDULE_PAGE_URL, headers=headers, timeout=15)
+        print(ент := f"Стучимся на страницу: {SCHEDULE_PAGE_URL}")
+        res = session.get(SCHEDULE_PAGE_URL, headers=headers, timeout=20)
+        
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             
+            # Проходим по всем ссылкам на странице в поисках файла 2 курса
             for link in soup.find_all('a', href=True):
                 href = link['href'].strip()
                 link_text = link.get_text().strip().lower()
                 decoded_href = urllib.parse.unquote(href).lower()
                 
-                if ("/api/media/file/" in href or ".xlsx" in decoded_href):
-                    if any(k in link_text or k in decoded_href for k in ["2 курс", "2_курс", "2-к", "2к"]):
+                # Ищем то, что ведет на скачивание файла и содержит упоминание 2 курса
+                if "/api/media/file/" in href or ".xlsx" in decoded_href:
+                    if any(k in link_text or k in decoded_href for k in ["2 курс", "2-го курса", "2к", "2_к"]):
                         target_url = href
+                        print(f"🎯 Найдена актуальная ссылка: {target_url}")
                         break
+            
+            # Если по точному ключевому слову не нашлось, берем первую попавшуюся ссылку на .xlsx файл
+            if not target_url:
+                for link in soup.find_all('a', href=True):
+                    href = link['href'].strip()
+                    if "/api/media/file/" in href or ".xlsx" in href.lower():
+                        target_url = href
+                        print(f"⚠️ Взята первая доступная ссылка: {target_url}")
+                        break
+        else:
+            print(f"⚠️ Сайт вернул код ответа: {res.status_code}")
+
     except Exception as e:
-        print(f"Ошибка при парсинге страницы: {e}")
+        print(f"❌ Ошибка при парсинге страницы: {e}")
 
     if not target_url:
-        target_url = FALLBACK_SCHEDULE_URL
+        raise Exception("Не удалось автоматически найти ссылку на расписание 2 курса на сайте esil.edu.kz. Проверьте структуру страницы.")
 
     if not target_url.startswith("http"):
         target_url = "https://esil.edu.kz" + target_url
 
-    print(f"Загрузка файла расписания: {target_url}")
+    print(f"📥 Скачивание файла расписания: {target_url}")
     
-    # Используем сессию с заголовками, чтобы обойти 403 ошибку
-    session = requests.Session()
     f_res = session.get(target_url, headers=headers, timeout=30)
     f_res.raise_for_status()
 
     with open(LOCAL_FILE_NAME, "wb") as f:
         f.write(f_res.content)
+    print("✅ Файл расписания успешно скачан и сохранен!")
 
 def parse_excel_schedule():
     wb = openpyxl.load_workbook(LOCAL_FILE_NAME, data_only=True)
