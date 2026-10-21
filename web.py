@@ -674,7 +674,7 @@ def create_web_app(get_db_pool, current_session=None):
             all_students = await conn.fetch("SELECT telegram_id, full_name FROM students ORDER BY full_name ASC")
             
             rows = await conn.fetch("""
-                SELECT 
+                SELECT DISTINCT ON (a.telegram_id)
                     a.telegram_id,
                     COALESCE(s.full_name, 'ID: ' || a.telegram_id::text) AS name,
                     a.distance,
@@ -684,8 +684,7 @@ def create_web_app(get_db_pool, current_session=None):
                 FROM attendance a
                 LEFT JOIN students s ON a.telegram_id = s.telegram_id
                 WHERE a.checkin_time >= $1 AND a.checkin_time < $2
-                ORDER BY a.checkin_time DESC
-                LIMIT 100
+                ORDER BY a.telegram_id, a.checkin_time DESC
             """, today_start, today_end)
 
         checked_in_ids = set()

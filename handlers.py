@@ -345,6 +345,24 @@ async def handle_location(message: Message, state: FSMContext):
             await state.clear()
             return await message.answer("✅ Координаты ВУЗа сохранены!", parse_mode="HTML")
 
+        now = datetime.now(ASTANA_TZ)
+        now_naive = now.replace(tzinfo=None)
+
+        # 🛑 ЗАЩИТА ОТ СПАМА: проверяем, отправлял ли студент гео за последние 50 минут
+        time_threshold = now_naive - timedelta(minutes=50)
+        async with pool.acquire() as conn:
+            existing_checkin = await conn.fetchrow("""
+                SELECT id FROM attendance 
+                WHERE telegram_id = $1 AND checkin_time >= $2
+            """, message.from_user.id, time_threshold)
+
+            if existing_checkin and message.from_user.id != ADMIN_ID:
+                return await message.answer(
+                    "⚠️ <b>Вы уже отметились на этой паре!</b>\nПовторная отправка геолокации заблокирована.",
+                    parse_mode="HTML",
+                    reply_markup=student_main_kb
+                )
+
         lat, lon = message.location.latitude, message.location.longitude
         uni_lat = await get_setting(pool, 'lat', DEFAULT_UNI_LAT)
         uni_lon = await get_setting(pool, 'lon', DEFAULT_UNI_LON)
@@ -353,8 +371,6 @@ async def handle_location(message: Message, state: FSMContext):
         dist = calculate_distance(uni_lat, uni_lon, lat, lon)
         is_inside = dist <= radius
 
-        now = datetime.now(ASTANA_TZ)
-        now_naive = now.replace(tzinfo=None)
         now_minutes = now.hour * 60 + now.minute
         day_code = now.weekday()
 
