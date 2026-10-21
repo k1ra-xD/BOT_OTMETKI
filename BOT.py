@@ -1,9 +1,11 @@
 import os
 import asyncio
+import traceback
 from datetime import datetime, timedelta
 import asyncpg
 from aiohttp import web
 from aiogram import Bot, Dispatcher
+from aiogram.types import ErrorEvent
 from sro_handlers import sro_router
 
 from config import TOKEN, DATABASE_URL, ASTANA_TZ, ADMIN_ID
@@ -13,6 +15,43 @@ from web import create_web_app
 from drive_handlers import drive_router
 
 notified_lessons = set()
+
+# 🚨 ГЛОБАЛЬНЫЙ ПЕРЕХВАТЧИК ОШИБОК ДЛЯ АДМИНА
+@dp.error() if 'dp' in locals() else lambda f: f  # (декоратор зарегистрируем ниже после создания dp)
+async def global_error_handler(event: ErrorEvent, bot: Bot):
+    exception = event.exception
+    update = event.update
+    
+    user_id = "Неизвестно"
+    user_name = "Неизвестный пользователь"
+    action_info = "Неизвестное действие"
+
+    if update.message:
+        user_id = update.message.from_user.id
+        user_name = update.message.from_user.full_name
+        action_info = f"Текст/Команда: {update.message.text or '[Медиа/Гео/Документ]'}"
+    elif update.callback_query:
+        user_id = update.callback_query.from_user.id
+        user_name = update.callback_query.from_user.full_name
+        action_info = f"Нажал инлайн-кнопку: {update.callback_query.data}"
+
+    tb_str = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
+    if len(tb_str) > 3500:
+        tb_str = tb_str[-3500:]
+
+    error_report = (
+        f"🚨 <b>Внимание! Ошибка в боте!</b>\n\n"
+        f"👤 <b>Пользователь:</b> {user_name} (ID: <code>{user_id}</code>)\n"
+        f"🕹 <b>Действие:</b> {action_info}\n\n"
+        f"⚠️ <b>Ошибка:</b>\n<pre>{type(exception).__name__}: {exception}</pre>\n\n"
+        f"📜 <b>Трейсбэк:</b>\n<pre>{tb_str}</pre>"
+    )
+
+    try:
+        await bot.send_message(ADMIN_ID, error_report, parse_mode="HTML")
+    except Exception as e:
+        print(f"Не удалось отправить лог ошибки админу: {e}")
+
 
 async def schedule_notifications_loop(bot: Bot):
     while True:
@@ -105,6 +144,10 @@ async def main():
 
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
+    
+    # 🔌 Регистрируем глобальный перехватчик ошибок
+    dp.error.register(global_error_handler)
+
     dp.include_router(sro_router)
     dp.include_router(drive_router)
     dp.include_router(router)
