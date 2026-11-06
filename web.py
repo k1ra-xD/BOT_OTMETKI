@@ -1482,6 +1482,50 @@ def create_web_app(get_db_pool, current_session=None, bot=None):
         except Exception as e:
             return web.json_response({'success': False, 'error': str(e)}, status=500)
 
+    async def handle_island_tts(request):
+        try:
+            if request.method == 'POST':
+                data = await request.json()
+                t_text = str(data.get('text', '')).strip()
+                t_voice = str(data.get('voice', 'ru-RU-DmitryNeural')).strip()
+            else:
+                t_text = str(request.query.get('text', '')).strip()
+                t_voice = str(request.query.get('voice', 'ru-RU-DmitryNeural')).strip()
+
+            if not t_text:
+                return web.json_response({'error': 'No text provided'}, status=400)
+
+            # 1. Try Microsoft Edge Neural TTS
+            try:
+                import edge_tts
+                comm = edge_tts.Communicate(t_text, t_voice)
+                audio_buffer = bytearray()
+                async for chunk in comm.stream():
+                    if chunk['type'] == 'audio':
+                        audio_buffer.extend(chunk['data'])
+                if audio_buffer:
+                    return web.Response(body=bytes(audio_buffer), content_type='audio/mpeg')
+            except Exception as e:
+                print('Edge TTS server fallback:', e)
+
+            # 2. Fallback to Google Natural Voice
+            try:
+                import urllib.parse
+                import aiohttp
+                encoded = urllib.parse.quote(t_text)
+                g_url = f'https://translate.google.com/translate_tts?ie=UTF-8&q={encoded}&tl=ru&client=tw-ob'
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(g_url, headers={'User-Agent': 'Mozilla/5.0'}) as resp:
+                        if resp.status == 200:
+                            g_bytes = await resp.read()
+                            return web.Response(body=g_bytes, content_type='audio/mpeg')
+            except Exception as e:
+                print('Google TTS fallback:', e)
+
+            return web.json_response({'error': 'TTS failed'}, status=500)
+        except Exception as e:
+            return web.json_response({'error': str(e)}, status=500)
+
     app.router.add_get('/', handle_root)
     app.router.add_get('/ping', handle_root)
     app.router.add_get('/dashboard', handle_dashboard)
@@ -1493,4 +1537,6 @@ def create_web_app(get_db_pool, current_session=None, bot=None):
     app.router.add_post('/api/island/delete', handle_island_delete)
     app.router.add_post('/api/island/add', handle_island_add)
     app.router.add_post('/api/island/voice_upload', handle_island_voice_upload)
+    app.router.add_post('/api/island/tts', handle_island_tts)
+    app.router.add_get('/api/island/tts', handle_island_tts)
     return app
