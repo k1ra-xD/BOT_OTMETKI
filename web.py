@@ -1063,6 +1063,26 @@ DASHBOARD_HTML = """
 </html>
 """
 
+
+# Active WebSocket connections for Dynamic Island
+active_island_ws = set()
+
+async def broadcast_island_task(task_dict):
+    if not task_dict:
+        return
+    import json
+    try:
+        data_to_send = dict(task_dict)
+        msg = json.dumps({"type": "new_task", "task": data_to_send}, default=str)
+        for ws in list(active_island_ws):
+            if not ws.closed:
+                try:
+                    await ws.send_str(msg)
+                except Exception as ex:
+                    print(f"[WS] Send failed: {ex}")
+    except Exception as e:
+        print(f"[WS] Broadcast error: {e}")
+
 def create_web_app(get_db_pool, current_session=None, bot=None):
     app = web.Application()
 
@@ -1380,6 +1400,30 @@ def create_web_app(get_db_pool, current_session=None, bot=None):
         except Exception as e:
             return web.json_response({'success': False, 'error': str(e)}, status=500)
 
+
+    async def handle_island_ws(request):
+        user_id = request.query.get('user_id', '')
+        if str(user_id) != str(ADMIN_ID):
+            return web.Response(status=403, text="Forbidden")
+
+        ws = web.WebSocketResponse(heartbeat=20.0)
+        await ws.prepare(request)
+        active_island_ws.add(ws)
+        print(f"[WS] Dynamic Island connected for admin {user_id}")
+
+        try:
+            await ws.send_json({"type": "connected", "message": "Island WebSocket active"})
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    if msg.data == "ping":
+                        await ws.send_str("pong")
+                elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                    break
+        finally:
+            active_island_ws.discard(ws)
+            print("[WS] Dynamic Island disconnected")
+        return ws
+
     async def handle_island_tts(request):
         try:
             if request.method == 'POST':
@@ -1437,4 +1481,5 @@ def create_web_app(get_db_pool, current_session=None, bot=None):
     app.router.add_post('/api/island/voice_upload', handle_island_voice_upload)
     app.router.add_post('/api/island/tts', handle_island_tts)
     app.router.add_get('/api/island/tts', handle_island_tts)
+    app.router.add_get('/api/island/ws', handle_island_ws)
     return app
