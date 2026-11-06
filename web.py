@@ -918,9 +918,11 @@ DASHBOARD_HTML = """
         let audioChunks = [];
         let recordTimer = null;
         let recordSeconds = 0;
+        let speechRecognizer = null;
+        let recognizedSpeechText = '';
 
         async function handleVoiceButton() {
-            if (mediaRecorder && mediaRecorder.state === 'recording') {
+            if ((mediaRecorder && mediaRecorder.state === 'recording') || speechRecognizer) {
                 stopVoiceRecording();
             } else {
                 startVoiceRecording();
@@ -933,76 +935,160 @@ DASHBOARD_HTML = """
             const recText = document.getElementById('voice-rec-text');
             const recIcon = document.getElementById('voice-rec-icon');
 
+            recognizedSpeechText = '';
+            statusBox.style.display = 'block';
+            statusBox.innerText = '🎙️ Говорите задачу (например: "Напомни завтра в 14:00 сдать курсовую")...';
+
+            const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+            let speechActive = false;
+
+            if (SpeechRec) {
+                try {
+                    speechRecognizer = new SpeechRec();
+                    speechRecognizer.lang = 'ru-RU';
+                    speechRecognizer.interimResults = true;
+                    speechRecognizer.continuous = true;
+
+                    speechRecognizer.onresult = (event) => {
+                        let fullText = '';
+                        for (let i = 0; i < event.results.length; ++i) {
+                            fullText += event.results[i][0].transcript;
+                        }
+                        if (fullText) {
+                            recognizedSpeechText = fullText.trim();
+                            statusBox.innerHTML = `🎙️ <b>Слушаю:</b> «${escapeHtml(recognizedSpeechText)}»`;
+                        }
+                    };
+
+                    speechRecognizer.onerror = (event) => {
+                        console.warn('SpeechRecognition error:', event.error);
+                    };
+
+                    speechRecognizer.start();
+                    speechActive = true;
+                } catch (e) {
+                    console.warn('SpeechRec failed to start:', e);
+                    speechRecognizer = null;
+                }
+            }
+
             try {
-                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    alert('Запись аудио не поддерживается или не разрешена.');
-                    return;
-                }
+                if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    let mimeType = 'audio/webm';
+                    if (!MediaRecorder.isTypeSupported('audio/webm')) {
+                        if (MediaRecorder.isTypeSupported('audio/ogg')) mimeType = 'audio/ogg';
+                        else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
+                        else mimeType = '';
+                    }
 
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                let mimeType = 'audio/webm';
-                if (!MediaRecorder.isTypeSupported('audio/webm')) {
-                    if (MediaRecorder.isTypeSupported('audio/ogg')) mimeType = 'audio/ogg';
-                    else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
-                    else mimeType = '';
-                }
+                    mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+                    audioChunks = [];
 
-                mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-                audioChunks = [];
+                    mediaRecorder.ondataavailable = (e) => {
+                        if (e.data && e.data.size > 0) audioChunks.push(e.data);
+                    };
 
-                mediaRecorder.ondataavailable = (e) => {
-                    if (e.data && e.data.size > 0) audioChunks.push(e.data);
-                };
+                    mediaRecorder.onstop = async () => {
+                        stream.getTracks().forEach(track => track.stop());
+                        clearInterval(recordTimer);
 
-                mediaRecorder.onstop = async () => {
-                    stream.getTracks().forEach(track => track.stop());
-                    clearInterval(recordTimer);
+                        // If mobile speech recognition already transcribed the text, send directly!
+                        if (recognizedSpeechText && recognizedSpeechText.length > 2) {
+                            await sendRecognizedText(recognizedSpeechText);
+                        } else {
+                            // Fallback to server audio recognition
+                            const mime = mediaRecorder.mimeType || 'audio/webm';
+                            const audioBlob = new Blob(audioChunks, { type: mime });
+                            await uploadVoiceBlob(audioBlob, mime);
+                        }
+                    };
 
-                    const mime = mediaRecorder.mimeType || 'audio/webm';
-                    const audioBlob = new Blob(audioChunks, { type: mime });
-                    await uploadVoiceBlob(audioBlob, mime);
-                };
-
-                mediaRecorder.start();
-                recordSeconds = 0;
-                btn.classList.add('recording');
-                recIcon.innerText = '⏹️';
-                recText.innerText = 'Идет запись (0с)... Нажмите для отправки';
-                
-                statusBox.style.display = 'block';
-                statusBox.innerText = '🎙️ Говорите задачу (например: "Напомни завтра в 14:00 сдать курсовую")...';
-
-                recordTimer = setInterval(() => {
-                    recordSeconds++;
-                    recText.innerText = `Идет запись (${recordSeconds}с)... Нажмите для отправки`;
-                }, 1000);
-
-                if (window.Telegram?.WebApp?.HapticFeedback) {
-                    window.Telegram.WebApp.HapticFeedback.impactOccurred('medium');
+                    mediaRecorder.start();
                 }
             } catch (err) {
-                console.error('Mic error:', err);
-                statusBox.style.display = 'block';
-                statusBox.innerText = '❌ Ошибка микрофона: ' + err.message;
+                console.warn('Mic stream error:', err);
+                if (!speechActive) {
+                    statusBox.innerText = '❌ Ошибка микрофона: ' + err.message;
+                    return;
+                }
+            }
+
+            recordSeconds = 0;
+            btn.classList.add('recording');
+            recIcon.innerText = '⏹️';
+            recText.innerText = 'Идет запись (0с)... Нажмите для отправки';
+
+            clearInterval(recordTimer);
+            recordTimer = setInterval(() => {
+                recordSeconds++;
+                recText.innerText = `Идет запись (${recordSeconds}с)... Нажмите для отправки`;
+            }, 1000);
+
+            if (window.Telegram?.WebApp?.HapticFeedback) {
+                window.Telegram.WebApp.HapticFeedback.impactOccurred('medium');
             }
         }
 
         function stopVoiceRecording() {
-            if (mediaRecorder && mediaRecorder.state === 'recording') {
-                const btn = document.getElementById('btn-voice-rec');
-                const recText = document.getElementById('voice-rec-text');
-                const recIcon = document.getElementById('voice-rec-icon');
-                const statusBox = document.getElementById('voice-status-box');
+            const btn = document.getElementById('btn-voice-rec');
+            const recText = document.getElementById('voice-rec-text');
+            const recIcon = document.getElementById('voice-rec-icon');
+            const statusBox = document.getElementById('voice-status-box');
 
-                btn.classList.remove('recording');
-                recIcon.innerText = '⏳';
-                recText.innerText = 'Обработка и расшифровка...';
-                statusBox.innerText = '⏳ Расшифровываю речь через Whisper и создаю задачу...';
-                
+            btn.classList.remove('recording');
+            recIcon.innerText = '⏳';
+            recText.innerText = 'Обработка и сохранение...';
+            statusBox.innerText = '⏳ Обрабатываю задачу...';
+            clearInterval(recordTimer);
+
+            if (speechRecognizer) {
+                try { speechRecognizer.stop(); } catch (e) { }
+                speechRecognizer = null;
+            }
+
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
                 mediaRecorder.stop();
-                if (window.Telegram?.WebApp?.HapticFeedback) {
-                    window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
+            } else if (recognizedSpeechText && recognizedSpeechText.length > 2) {
+                sendRecognizedText(recognizedSpeechText);
+            }
+
+            if (window.Telegram?.WebApp?.HapticFeedback) {
+                window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
+            }
+        }
+
+        async function sendRecognizedText(text) {
+            const statusBox = document.getElementById('voice-status-box');
+            const recText = document.getElementById('voice-rec-text');
+            const recIcon = document.getElementById('voice-rec-icon');
+
+            try {
+                const res = await fetch('/api/island/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    statusBox.innerHTML = `✅ <b>Распознано:</b> «${escapeHtml(text)}»<br>🏝️ Задача добавлена в Dynamic Island!`;
+                    if (window.Telegram?.WebApp?.HapticFeedback) {
+                        window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+                    }
+                    await loadIslandTasks();
+                } else {
+                    statusBox.innerText = '⚠️ ' + (data.error || 'Ошибка добавления');
                 }
+            } catch (e) {
+                statusBox.innerText = '❌ Ошибка сети: ' + e.message;
+            } finally {
+                recIcon.innerText = '🎙️';
+                recText.innerText = 'Записать голосовое напоминание';
+                setTimeout(() => {
+                    if (statusBox.innerText.includes('Распознано')) {
+                        statusBox.style.display = 'none';
+                    }
+                }, 4000);
             }
         }
 
