@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from aiohttp import web
-from config import ASTANA_TZ
+from config import ASTANA_TZ, ADMIN_ID
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -655,7 +655,7 @@ DASHBOARD_HTML = """
 </html>
 """
 
-def create_web_app(get_db_pool, current_session=None):
+def create_web_app(get_db_pool, current_session=None, bot=None):
     app = web.Application()
 
     async def handle_dashboard(request):
@@ -820,9 +820,91 @@ def create_web_app(get_db_pool, current_session=None):
     async def handle_root(request):
         return web.Response(text="Bot is running! 🚀", content_type="text/plain", status=200)
 
+    # Dynamic Island API Endpoints
+    async def handle_island_tasks(request):
+        pool = get_db_pool()
+        if not pool:
+            return web.json_response({'success': False, 'error': 'No DB connection'}, status=500)
+        user_id_str = request.query.get('user_id', '')
+        user_id = int(user_id_str) if user_id_str.isdigit() else ADMIN_ID
+        if user_id != ADMIN_ID:
+            return web.json_response({'success': False, 'error': 'Forbidden'}, status=403)
+        from db import get_active_island_tasks
+        tasks = await get_active_island_tasks(pool, user_id)
+        result = []
+        for t in tasks:
+            item = dict(t)
+            if 'created_at' in item and item['created_at']:
+                item['created_at'] = item['created_at'].isoformat()
+            result.append(item)
+        return web.json_response({'success': True, 'tasks': result})
+
+    async def handle_island_mark_spoken(request):
+        pool = get_db_pool()
+        if not pool:
+            return web.json_response({'success': False, 'error': 'No DB'}, status=500)
+        try:
+            data = await request.json()
+            task_id = int(data.get('task_id', 0))
+            if task_id:
+                from db import mark_island_task_spoken
+                await mark_island_task_spoken(pool, task_id)
+                return web.json_response({'success': True})
+        except Exception as e:
+            return web.json_response({'success': False, 'error': str(e)}, status=400)
+        return web.json_response({'success': False, 'error': 'Invalid task_id'}, status=400)
+
+    async def handle_island_complete(request):
+        pool = get_db_pool()
+        if not pool:
+            return web.json_response({'success': False, 'error': 'No DB'}, status=500)
+        try:
+            data = await request.json()
+            task_id = int(data.get('task_id', 0))
+            if task_id:
+                from db import mark_island_task_completed
+                row = await mark_island_task_completed(pool, task_id)
+                if row and bot and row.get('user_id'):
+                    try:
+                        await bot.send_message(
+                            row['user_id'],
+                            f"🎉 <b>Задача выполнена на компьютере!</b>\n«{row.get('title', '')}»",
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
+                return web.json_response({'success': True})
+        except Exception as e:
+            return web.json_response({'success': False, 'error': str(e)}, status=400)
+        return web.json_response({'success': False, 'error': 'Invalid task_id'}, status=400)
+
+    async def handle_island_add(request):
+        pool = get_db_pool()
+        if not pool:
+            return web.json_response({'success': False, 'error': 'No DB'}, status=500)
+        try:
+            data = await request.json()
+            title = str(data.get('title', '')).strip()
+            if not title:
+                return web.json_response({'success': False, 'error': 'Title required'}, status=400)
+            user_id = int(data.get('user_id', ADMIN_ID))
+            if user_id != ADMIN_ID:
+                return web.json_response({'success': False, 'error': 'Forbidden'}, status=403)
+            t_date = str(data.get('target_date', ''))
+            t_time = str(data.get('target_time', ''))
+            from db import add_island_task
+            task = await add_island_task(pool, user_id, title, t_date, t_time)
+            return web.json_response({'success': True, 'task': task})
+        except Exception as e:
+            return web.json_response({'success': False, 'error': str(e)}, status=400)
+
     app.router.add_get('/', handle_root)
     app.router.add_get('/ping', handle_root)
     app.router.add_get('/dashboard', handle_dashboard)
     app.router.add_get('/api/stats', handle_api_stats)
     app.router.add_get('/api/analytics', handle_api_analytics)
+    app.router.add_get('/api/island/tasks', handle_island_tasks)
+    app.router.add_post('/api/island/mark_spoken', handle_island_mark_spoken)
+    app.router.add_post('/api/island/complete', handle_island_complete)
+    app.router.add_post('/api/island/add', handle_island_add)
     return app
