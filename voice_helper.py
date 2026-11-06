@@ -11,9 +11,18 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 async def transcribe_audio_bytes(audio_bytes: bytes, filename: str = "voice.ogg") -> str:
     """
     Распознает аудио в текст с использованием бесплатных API:
-    1. Groq (Whisper-large-v3) - 100% бесплатно, молниеносно, принимает .ogg напрямую
+    1. Groq (Whisper-large-v3) - 100% бесплатно, молниеносно, принимает .ogg и .webm напрямую
     2. Google Gemini Flash (если указан GEMINI_API_KEY)
     """
+    # Определяем MIME тип по расширению файла
+    mime_type = "audio/ogg"
+    if filename.endswith(".webm"):
+        mime_type = "audio/webm"
+    elif filename.endswith(".mp3"):
+        mime_type = "audio/mp3"
+    elif filename.endswith(".wav"):
+        mime_type = "audio/wav"
+
     # 1. Проверяем Groq API
     groq_key = os.environ.get("GROQ_API_KEY", GROQ_API_KEY)
     if groq_key:
@@ -22,7 +31,7 @@ async def transcribe_audio_bytes(audio_bytes: bytes, filename: str = "voice.ogg"
             headers = {"Authorization": f"Bearer {groq_key}"}
             
             data = aiohttp.FormData()
-            data.add_field("file", audio_bytes, filename=filename, content_type="audio/ogg")
+            data.add_field("file", audio_bytes, filename=filename, content_type=mime_type)
             data.add_field("model", "whisper-large-v3")
             data.add_field("language", "ru")
             data.add_field("response_format", "json")
@@ -52,7 +61,7 @@ async def transcribe_audio_bytes(audio_bytes: bytes, filename: str = "voice.ogg"
                 "contents": [{
                     "parts": [
                         {"text": "Точно расшифруй аудио на русском языке. Верни ТОЛЬКО расшифрованный текст без лишних комментариев, пояснений и кавычек."},
-                        {"inline_data": {"mime_type": "audio/ogg", "data": audio_b64}}
+                        {"inline_data": {"mime_type": mime_type, "data": audio_b64}}
                     ]
                 }]
             }

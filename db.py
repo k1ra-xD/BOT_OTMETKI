@@ -133,3 +133,11 @@ async def mark_island_task_completed(pool, task_id: int):
             RETURNING id, user_id, title
         """, task_id)
         return dict(row) if row else None
+
+async def delete_island_task(pool, task_id: int):
+    """Удалить задачу"""
+    if not pool:
+        return False
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM island_tasks WHERE id = $1", task_id)
+        return True

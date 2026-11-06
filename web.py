@@ -290,7 +290,217 @@ DASHBOARD_HTML = """
             border-radius: 4px;
             transition: width 0.4s ease;
         }
+
+        /* Dynamic Island MiniApp Styles */
+        .island-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 12px;
+            margin-bottom: 14px;
+        }
+        .island-card-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .island-badge-live {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            color: #60a5fa;
+            background: rgba(96, 165, 250, 0.12);
+            padding: 3px 8px;
+            border-radius: 12px;
+            border: 1px solid rgba(96, 165, 250, 0.25);
+        }
+        .island-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #60a5fa;
+            box-shadow: 0 0 6px #60a5fa;
+        }
+        .island-pc-sync {
+            font-size: 11px;
+            color: var(--hint-color);
+        }
+        .btn-voice-rec {
+            width: 100%;
+            background: linear-gradient(135deg, #2563eb, #4f46e5);
+            color: #fff;
+            border: none;
+            border-radius: 12px;
+            padding: 12px 14px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.3);
+            margin-bottom: 10px;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .btn-voice-rec:active {
+            transform: scale(0.98);
+        }
+        .btn-voice-rec.recording {
+            background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+            box-shadow: 0 0 16px rgba(239, 68, 68, 0.6) !important;
+            animation: pulseRecording 1.5s infinite;
+        }
+        @keyframes pulseRecording {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        .voice-status-box {
+            font-size: 12px;
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: rgba(0,0,0,0.25);
+            color: #94a3b8;
+            margin-bottom: 10px;
+            text-align: center;
+            line-height: 1.4;
+        }
+        .island-input-wrap {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 6px;
+        }
+        .island-task-input {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 10px 12px;
+            color: var(--text-color);
+            font-size: 13px;
+            outline: none;
+            box-sizing: border-box;
+        }
+        .island-task-input:focus {
+            border-color: #3b82f6;
+        }
+        .btn-island-submit {
+            background: #10b981;
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            padding: 10px 14px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .btn-island-submit:active {
+            transform: scale(0.96);
+        }
+        .island-hint {
+            font-size: 10.5px;
+            color: var(--hint-color);
+            margin-top: 4px;
+        }
+        .island-section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding: 0 4px;
+        }
+        .section-title {
+            font-size: 13px;
+            font-weight: 700;
+        }
+        .btn-island-refresh {
+            background: none;
+            border: none;
+            font-size: 14px;
+            cursor: pointer;
+            color: var(--hint-color);
+            padding: 2px 6px;
+        }
+        .island-task-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+        }
+        .island-task-info {
+            flex: 1;
+        }
+        .island-task-title {
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: var(--text-color);
+        }
+        .island-task-meta {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            font-size: 11px;
+        }
+        .badge-time {
+            color: #60a5fa;
+            background: rgba(96, 165, 250, 0.1);
+            padding: 2px 6px;
+            border-radius: 6px;
+        }
+        .badge-spoken {
+            color: #4ade80;
+            background: rgba(74, 222, 128, 0.1);
+            padding: 2px 6px;
+            border-radius: 6px;
+        }
+        .badge-waiting {
+            color: #facc15;
+            background: rgba(250, 204, 21, 0.1);
+            padding: 2px 6px;
+            border-radius: 6px;
+        }
+        .island-task-actions {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-action-done {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            padding: 6px 10px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .btn-action-done:active { transform: scale(0.95); }
+        .btn-action-del {
+            background: rgba(239, 68, 68, 0.12);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.25);
+            padding: 6px 8px;
+            border-radius: 8px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+        .btn-action-del:active { transform: scale(0.95); }
     </style>
+
 </head>
 <body>
     <div class="app-header">
@@ -321,6 +531,7 @@ DASHBOARD_HTML = """
             <button id="tab-present" class="tab-btn active" onclick="switchTab('present')">📍 Сегодня (<span id="tab-present-num">0</span>)</button>
             <button id="tab-absent" class="tab-btn" onclick="switchTab('absent')">🚫 Прогулы (<span id="tab-absent-num">0</span>)</button>
             <button id="tab-analytics" class="tab-btn" onclick="switchTab('analytics')">📈 Аналитика</button>
+            <button id="tab-island" class="tab-btn" onclick="switchTab('island')">🏝️ Остров (<span id="tab-island-num">0</span>)</button>
         </div>
 
         <div id="filter-wrapper" style="display:block;">
@@ -379,6 +590,42 @@ DASHBOARD_HTML = """
                 </ul>
             </div>
         </div>
+
+        <!-- Контейнер Dynamic Island Задач -->
+        <div id="island-container" style="display:none;">
+            <div class="island-card">
+                <div class="island-card-top">
+                    <div class="island-badge-live">
+                        <span class="island-dot"></span>
+                        <span>Dynamic Island</span>
+                    </div>
+                    <span class="island-pc-sync">🖥️ Озвучка на ПК</span>
+                </div>
+
+                <button id="btn-voice-rec" class="btn-voice-rec" onclick="handleVoiceButton()">
+                    <span id="voice-rec-icon">🎙️</span>
+                    <span id="voice-rec-text">Записать голосовое напоминание</span>
+                </button>
+                <div id="voice-status-box" class="voice-status-box" style="display:none;"></div>
+
+                <div class="island-input-wrap">
+                    <input type="text" id="island-task-input" class="island-task-input" 
+                           placeholder="Например: Сдать курсовую завтра в 14:00"
+                           onkeydown="if(event.key==='Enter') createTextTask()">
+                    <button class="btn-island-submit" onclick="createTextTask()">Добавить</button>
+                </div>
+                <div class="island-hint">💡 Дата и время определяются автоматически (например: <i>завтра в 15:00</i>)</div>
+            </div>
+
+            <div class="island-section-header">
+                <span class="section-title">📌 Очередь задач</span>
+                <button class="btn-island-refresh" onclick="loadIslandTasks()">🔄</button>
+            </div>
+
+            <ul id="island-tasks-list">
+                <li><i>Загрузка задач...</i></li>
+            </ul>
+        </div>
     </div>
 
     <script>
@@ -397,14 +644,18 @@ DASHBOARD_HTML = """
             document.getElementById('tab-present').className = 'tab-btn' + (tab === 'present' ? ' active' : '');
             document.getElementById('tab-absent').className = 'tab-btn' + (tab === 'absent' ? ' active' : '');
             document.getElementById('tab-analytics').className = 'tab-btn' + (tab === 'analytics' ? ' active' : '');
+            document.getElementById('tab-island').className = 'tab-btn' + (tab === 'island' ? ' active' : '');
             
             document.getElementById('present-container').style.display = tab === 'present' ? 'block' : 'none';
             document.getElementById('absent-container').style.display = tab === 'absent' ? 'block' : 'none';
             document.getElementById('analytics-container').style.display = tab === 'analytics' ? 'block' : 'none';
+            document.getElementById('island-container').style.display = tab === 'island' ? 'block' : 'none';
             document.getElementById('filter-wrapper').style.display = tab === 'present' ? 'block' : 'none';
             
             if (tab === 'analytics') {
                 loadAnalytics();
+            } else if (tab === 'island') {
+                loadIslandTasks();
             } else {
                 renderLists();
             }
@@ -497,6 +748,15 @@ DASHBOARD_HTML = """
                 document.getElementById('absent-count').innerText = data.absent_count || 0;
                 document.getElementById('tab-present-num').innerText = data.present_count || 0;
                 document.getElementById('tab-absent-num').innerText = data.absent_count || 0;
+                if (activeTab === 'island') {
+                    loadIslandTasks();
+                } else {
+                    // тихо обновляем бейдж задач островка
+                    fetch('/api/island/tasks').then(r => r.json()).then(d => {
+                        const b = document.getElementById('tab-island-num');
+                        if (b && d.tasks) b.innerText = d.tasks.length;
+                    }).catch(() => {});
+                }
                 
                 if (activeTab !== 'analytics') {
                     renderLists();
@@ -650,7 +910,262 @@ DASHBOARD_HTML = """
 
         loadStats();
         setInterval(loadStats, 3000);
+
+        // ============================================
+        // DYNAMIC ISLAND TASK & VOICE RECORDING LOGIC
+        // ============================================
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let recordTimer = null;
+        let recordSeconds = 0;
+
+        async function handleVoiceButton() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                stopVoiceRecording();
+            } else {
+                startVoiceRecording();
+            }
+        }
+
+        async function startVoiceRecording() {
+            const statusBox = document.getElementById('voice-status-box');
+            const btn = document.getElementById('btn-voice-rec');
+            const recText = document.getElementById('voice-rec-text');
+            const recIcon = document.getElementById('voice-rec-icon');
+
+            try {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    alert('Запись аудио не поддерживается или не разрешена.');
+                    return;
+                }
+
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                let mimeType = 'audio/webm';
+                if (!MediaRecorder.isTypeSupported('audio/webm')) {
+                    if (MediaRecorder.isTypeSupported('audio/ogg')) mimeType = 'audio/ogg';
+                    else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
+                    else mimeType = '';
+                }
+
+                mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data && e.data.size > 0) audioChunks.push(e.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    stream.getTracks().forEach(track => track.stop());
+                    clearInterval(recordTimer);
+
+                    const mime = mediaRecorder.mimeType || 'audio/webm';
+                    const audioBlob = new Blob(audioChunks, { type: mime });
+                    await uploadVoiceBlob(audioBlob, mime);
+                };
+
+                mediaRecorder.start();
+                recordSeconds = 0;
+                btn.classList.add('recording');
+                recIcon.innerText = '⏹️';
+                recText.innerText = 'Идет запись (0с)... Нажмите для отправки';
+                
+                statusBox.style.display = 'block';
+                statusBox.innerText = '🎙️ Говорите задачу (например: "Напомни завтра в 14:00 сдать курсовую")...';
+
+                recordTimer = setInterval(() => {
+                    recordSeconds++;
+                    recText.innerText = `Идет запись (${recordSeconds}с)... Нажмите для отправки`;
+                }, 1000);
+
+                if (window.Telegram?.WebApp?.HapticFeedback) {
+                    window.Telegram.WebApp.HapticFeedback.impactOccurred('medium');
+                }
+            } catch (err) {
+                console.error('Mic error:', err);
+                statusBox.style.display = 'block';
+                statusBox.innerText = '❌ Ошибка микрофона: ' + err.message;
+            }
+        }
+
+        function stopVoiceRecording() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                const btn = document.getElementById('btn-voice-rec');
+                const recText = document.getElementById('voice-rec-text');
+                const recIcon = document.getElementById('voice-rec-icon');
+                const statusBox = document.getElementById('voice-status-box');
+
+                btn.classList.remove('recording');
+                recIcon.innerText = '⏳';
+                recText.innerText = 'Обработка и расшифровка...';
+                statusBox.innerText = '⏳ Расшифровываю речь через Whisper и создаю задачу...';
+                
+                mediaRecorder.stop();
+                if (window.Telegram?.WebApp?.HapticFeedback) {
+                    window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
+                }
+            }
+        }
+
+        async function uploadVoiceBlob(blob, mimeType) {
+            const statusBox = document.getElementById('voice-status-box');
+            const recText = document.getElementById('voice-rec-text');
+            const recIcon = document.getElementById('voice-rec-icon');
+
+            try {
+                let ext = 'webm';
+                if (mimeType.includes('ogg')) ext = 'ogg';
+                else if (mimeType.includes('mp4')) ext = 'mp4';
+
+                const formData = new FormData();
+                formData.append('audio', blob, `voice.${ext}`);
+
+                const res = await fetch('/api/island/voice_upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    statusBox.innerHTML = `✅ <b>Распознано:</b> «${escapeHtml(data.transcribed)}»<br>🏝️ Отправлено в Dynamic Island!`;
+                    if (window.Telegram?.WebApp?.HapticFeedback) {
+                        window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+                    }
+                    await loadIslandTasks();
+                } else {
+                    statusBox.innerText = '⚠️ ' + (data.error || 'Ошибка распознавания');
+                }
+            } catch (e) {
+                statusBox.innerText = '❌ Ошибка сети: ' + e.message;
+            } finally {
+                recIcon.innerText = '🎙️';
+                recText.innerText = 'Записать голосовое напоминание';
+                setTimeout(() => {
+                    if (statusBox.innerText.includes('Распознано')) {
+                        statusBox.style.display = 'none';
+                    }
+                }, 5000);
+            }
+        }
+
+        async function createTextTask() {
+            const input = document.getElementById('island-task-input');
+            const text = (input.value || '').trim();
+            if (!text) return;
+
+            input.value = '';
+            const statusBox = document.getElementById('voice-status-box');
+            statusBox.style.display = 'block';
+            statusBox.innerText = '⏳ Добавление задачи...';
+
+            try {
+                const res = await fetch('/api/island/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    statusBox.innerHTML = `✅ Задача «${escapeHtml(data.task.title)}» сохранена для Dynamic Island!`;
+                    if (window.Telegram?.WebApp?.HapticFeedback) {
+                        window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+                    }
+                    await loadIslandTasks();
+                    setTimeout(() => { statusBox.style.display = 'none'; }, 4000);
+                } else {
+                    statusBox.innerText = '⚠️ ' + (data.error || 'Ошибка');
+                }
+            } catch (e) {
+                statusBox.innerText = '❌ Ошибка сети: ' + e.message;
+            }
+        }
+
+        async function loadIslandTasks() {
+            const list = document.getElementById('island-tasks-list');
+            try {
+                const res = await fetch('/api/island/tasks');
+                const data = await res.json();
+                const tasks = data.tasks || [];
+
+                const badgeNum = document.getElementById('tab-island-num');
+                if (badgeNum) badgeNum.innerText = tasks.length;
+
+                if (tasks.length === 0) {
+                    list.innerHTML = '<div class="empty-box" style="color:#4ade80; padding:24px 0;">✨ Все задачи выполнены! В очереди островка пусто.</div>';
+                    return;
+                }
+
+                list.innerHTML = '';
+                tasks.forEach(t => {
+                    const timeStr = t.target_time ? `⏰ ${t.target_time}` : '';
+                    const dateStr = t.target_date ? `📅 ${t.target_date}` : '';
+                    const metaInfo = [dateStr, timeStr].filter(Boolean).join(' • ');
+
+                    const spokenBadge = t.is_spoken 
+                        ? '<span class="badge-spoken">🔊 Озвучено на ПК</span>'
+                        : '<span class="badge-waiting">⏳ Ждет на ПК</span>';
+
+                    const li = document.createElement('li');
+                    li.className = 'island-task-card';
+                    li.innerHTML = `
+                        <div class="island-task-info">
+                            <div class="island-task-title">${escapeHtml(t.title)}</div>
+                            <div class="island-task-meta">
+                                ${metaInfo ? `<span class="badge-time">${metaInfo}</span>` : ''}
+                                ${spokenBadge}
+                            </div>
+                        </div>
+                        <div class="island-task-actions">
+                            <button class="btn-action-done" onclick="completeTask(${t.id})" title="Отметить выполненной">✓ Готово</button>
+                            <button class="btn-action-del" onclick="deleteTask(${t.id})" title="Удалить">🗑️</button>
+                        </div>
+                    `;
+                    list.appendChild(li);
+                });
+            } catch (e) {
+                list.innerHTML = `<li><span style="color:#f87171;">Ошибка загрузки: ${e.message}</span></li>`;
+            }
+        }
+
+        async function completeTask(id) {
+            try {
+                await fetch('/api/island/complete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ task_id: id })
+                });
+                if (window.Telegram?.WebApp?.HapticFeedback) {
+                    window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+                }
+                await loadIslandTasks();
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function deleteTask(id) {
+            if (!confirm('Удалить эту задачу из Dynamic Island?')) return;
+            try {
+                await fetch('/api/island/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ task_id: id })
+                });
+                if (window.Telegram?.WebApp?.HapticFeedback) {
+                    window.Telegram.WebApp.HapticFeedback.notificationOccurred('warning');
+                }
+                await loadIslandTasks();
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function escapeHtml(str) {
+            return (str || '').replace(/[&<>'"]/g, 
+                tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+            );
+        }
     </script>
+
 </body>
 </html>
 """
@@ -878,25 +1393,94 @@ def create_web_app(get_db_pool, current_session=None, bot=None):
             return web.json_response({'success': False, 'error': str(e)}, status=400)
         return web.json_response({'success': False, 'error': 'Invalid task_id'}, status=400)
 
+    async def handle_island_delete(request):
+        pool = get_db_pool()
+        if not pool:
+            return web.json_response({'success': False, 'error': 'No DB'}, status=500)
+        try:
+            data = await request.json()
+            task_id = int(data.get('task_id', 0))
+            if task_id:
+                from db import delete_island_task
+                await delete_island_task(pool, task_id)
+                return web.json_response({'success': True})
+        except Exception as e:
+            return web.json_response({'success': False, 'error': str(e)}, status=400)
+        return web.json_response({'success': False, 'error': 'Invalid task_id'}, status=400)
+
     async def handle_island_add(request):
         pool = get_db_pool()
         if not pool:
             return web.json_response({'success': False, 'error': 'No DB'}, status=500)
         try:
             data = await request.json()
+            raw_text = str(data.get('text', '')).strip()
             title = str(data.get('title', '')).strip()
-            if not title:
-                return web.json_response({'success': False, 'error': 'Title required'}, status=400)
             user_id = int(data.get('user_id', ADMIN_ID))
             if user_id != ADMIN_ID:
                 return web.json_response({'success': False, 'error': 'Forbidden'}, status=403)
+
             t_date = str(data.get('target_date', ''))
             t_time = str(data.get('target_time', ''))
+
+            # Умный разбор естественного языка (если передан text)
+            if raw_text and not title:
+                from voice_helper import parse_task_time_and_title
+                title, t_date, t_time = parse_task_time_and_title(raw_text)
+
+            if not title:
+                return web.json_response({'success': False, 'error': 'Title required'}, status=400)
+
             from db import add_island_task
             task = await add_island_task(pool, user_id, title, t_date, t_time)
             return web.json_response({'success': True, 'task': task})
         except Exception as e:
             return web.json_response({'success': False, 'error': str(e)}, status=400)
+
+    async def handle_island_voice_upload(request):
+        pool = get_db_pool()
+        if not pool:
+            return web.json_response({'success': False, 'error': 'No DB'}, status=500)
+        try:
+            audio_bytes = None
+            filename = 'voice.webm'
+            if request.content_type.startswith('multipart/'):
+                reader = await request.multipart()
+                while True:
+                    part = await reader.next()
+                    if part is None:
+                        break
+                    if part.name == 'audio':
+                        audio_bytes = await part.read()
+                        if part.filename:
+                            filename = part.filename
+                        break
+            elif request.content_type.startswith('audio/'):
+                audio_bytes = await request.read()
+            else:
+                post_data = await request.post()
+                audio_field = post_data.get('audio')
+                if hasattr(audio_field, 'file'):
+                    audio_bytes = audio_field.file.read()
+                    filename = getattr(audio_field, 'filename', 'voice.webm')
+
+            if not audio_bytes:
+                return web.json_response({'success': False, 'error': 'Аудиозапись не передана'}, status=400)
+
+            from voice_helper import transcribe_audio_bytes, parse_task_time_and_title
+            transcribed = await transcribe_audio_bytes(audio_bytes, filename=filename)
+            if not transcribed:
+                return web.json_response({
+                    'success': False, 
+                    'error': 'Не удалось распознать речь. Убедитесь, что в переменных окружения на Render указан GROQ_API_KEY.'
+                }, status=400)
+
+            title, t_date, t_time = parse_task_time_and_title(transcribed)
+            from db import add_island_task
+            task = await add_island_task(pool, ADMIN_ID, title, t_date, t_time)
+            return web.json_response({'success': True, 'transcribed': transcribed, 'task': task})
+        except Exception as e:
+            return web.json_response({'success': False, 'error': str(e)}, status=500)
 
     app.router.add_get('/', handle_root)
     app.router.add_get('/ping', handle_root)
@@ -906,5 +1490,7 @@ def create_web_app(get_db_pool, current_session=None, bot=None):
     app.router.add_get('/api/island/tasks', handle_island_tasks)
     app.router.add_post('/api/island/mark_spoken', handle_island_mark_spoken)
     app.router.add_post('/api/island/complete', handle_island_complete)
+    app.router.add_post('/api/island/delete', handle_island_delete)
     app.router.add_post('/api/island/add', handle_island_add)
+    app.router.add_post('/api/island/voice_upload', handle_island_voice_upload)
     return app
