@@ -353,35 +353,10 @@ DASHBOARD_HTML = """
             font-size: 11px;
             color: var(--hint-color);
         }
-        .btn-voice-rec {
-            width: 100%;
-            background: linear-gradient(135deg, #2563eb, #4f46e5);
-            color: #fff;
-            border: none;
-            border-radius: 12px;
-            padding: 12px 14px;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            transition: all 0.2s ease;
-            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.3);
-            margin-bottom: 10px;
-            -webkit-tap-highlight-color: transparent;
-        }
-        .btn-voice-rec:active {
-            transform: scale(0.98);
-        }
-        .btn-voice-rec.recording {
-            background: linear-gradient(135deg, #ef4444, #dc2626) !important;
-            box-shadow: 0 0 16px rgba(239, 68, 68, 0.6) !important;
-            animation: pulseRecording 1.5s infinite;
-        }
-        @keyframes pulseRecording {
-            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+        
+        
+        
+        
             70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
             100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
         }
@@ -627,19 +602,22 @@ DASHBOARD_HTML = """
                     <span class="island-pc-sync">🖥️ Озвучка на ПК</span>
                 </div>
 
-                <button id="btn-voice-rec" class="btn-voice-rec" onclick="handleVoiceButton()">
-                    <span id="voice-rec-icon">🎙️</span>
-                    <span id="voice-rec-text">Записать голосовое напоминание</span>
-                </button>
-                <div id="voice-status-box" class="voice-status-box" style="display:none;"></div>
-
                 <div class="island-input-wrap">
                     <input type="text" id="island-task-input" class="island-task-input" 
                            placeholder="Например: Сдать курсовую завтра в 14:00"
                            onkeydown="if(event.key==='Enter') createTextTask()">
                     <button class="btn-island-submit" onclick="createTextTask()">Добавить</button>
                 </div>
-                <div class="island-hint">💡 Дата и время определяются автоматически (например: <i>завтра в 15:00</i>)</div>
+
+                <div class="quick-time-chips">
+                    <button type="button" class="time-chip" onclick="appendQuickTime('сегодня в 18:00')">⚡ Сегодня 18:00</button>
+                    <button type="button" class="time-chip" onclick="appendQuickTime('завтра в 10:00')">📅 Завтра 10:00</button>
+                    <button type="button" class="time-chip" onclick="appendQuickTime('завтра в 14:00')">📅 Завтра 14:00</button>
+                    <button type="button" class="time-chip" onclick="appendQuickTime('послезавтра в 12:00')">📅 Послезавтра</button>
+                </div>
+
+                <div id="island-status-box" class="voice-status-box" style="display:none;"></div>
+                <div class="island-hint">💡 Напишите задачу обычными словами — дата и время определятся автоматически!</div>
             </div>
 
             <div class="island-section-header">
@@ -1089,7 +1067,12 @@ def create_web_app(get_db_pool, current_session=None, bot=None):
     app = web.Application()
 
     async def handle_dashboard(request):
-        return web.Response(text=DASHBOARD_HTML, content_type='text/html')
+        headers = {
+            'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        }
+        return web.Response(text=DASHBOARD_HTML, content_type='text/html', headers=headers)
 
     async def handle_api_stats(request):
         db_pool = get_db_pool()

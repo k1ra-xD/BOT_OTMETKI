@@ -104,7 +104,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 chat_id=message.chat.id,
                 menu_button=MenuButtonWebApp(
                     text="📊 Дашборд",
-                    web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard")
+                    web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard?v=3")
                 )
             )
         else:
@@ -134,7 +134,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
         )
 
         admin_inline_panel = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📊 WebApp Дашборд", web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard"))],
+            [InlineKeyboardButton(text="📊 WebApp Дашборд", web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard?v=3"))],
             [InlineKeyboardButton(text="🔄 Авто-обновить с сайта (esil.edu.kz)", callback_data="admin_auto_update_schedule")],
             [InlineKeyboardButton(text="✏️ Ввести расписание вручную", callback_data="admin_edit_schedule")]
         ])
