@@ -19,58 +19,13 @@ async def handle_voice_task(message: Message, bot: Bot):
     if user_id != ADMIN_ID:
         return
 
-    status_msg = await message.answer("🎧 <i>Слушаю и расшифровываю голосовое...</i>", parse_mode="HTML")
-
-    try:
-        voice = message.voice
-        voice_file = await bot.get_file(voice.file_id)
-        
-        file_buffer = io.BytesIO()
-        await bot.download_file(voice_file.file_path, file_buffer)
-        audio_bytes = file_buffer.getvalue()
-
-        # Распознаем речь
-        transcribed_text = await transcribe_audio_bytes(audio_bytes, filename=f"voice_{voice.file_id}.ogg")
-
-        if not transcribed_text:
-            return await status_msg.edit_text(
-                "⚠️ <b>Не удалось распознать голосовое сообщение.</b>\n\n"
-                "💡 <i>Подсказка:</i> для работы распознавания голоса добавьте в переменные окружения Render бесплатный ключ <code>GROQ_API_KEY</code> (создается за 10 секунд на <a href='https://console.groq.com'>console.groq.com</a>).\n\n"
-                "Вы также можете просто отправить задачу текстом: <code>/task сдать СРО завтра в 14:00</code>",
-                parse_mode="HTML",
-                disable_web_page_preview=True
-            )
-
-        # Выделяем название задачи и время
-        title, target_date, target_time = parse_task_time_and_title(transcribed_text)
-
-        # Сохраняем в базу данных
-        from handlers import get_db_pool
-        pool = get_db_pool()
-        task = await add_island_task(pool, user_id, title, target_date, target_time)
-
-        time_str = f" в {target_time}" if target_time else ""
-
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Выполнено", callback_data=f"itask_done:{task['id'] if task else 0}"),
-                InlineKeyboardButton(text="📋 Все задачи", callback_data="itask_list")
-            ]
-        ])
-
-        await status_msg.edit_text(
-            f"🎙️ <b>Распознано:</b> <i>«{transcribed_text}»</i>\n\n"
-            f"🏝️ <b>Задача для Dynamic Island сохранена!</b>\n"
-            f"📌 <b>Дело:</b> {title}\n"
-            f"⏰ <b>Срок:</b> {target_date}{time_str}\n\n"
-            f"🔊 <i>Dynamic Island на компьютере напомнит и проговорит эту задачу вслух!</i>",
-            parse_mode="HTML",
-            reply_markup=kb
-        )
-
-    except Exception as e:
-        print(f"Ошибка обработки голосового: {e}")
-        await status_msg.edit_text(f"⚠️ Ошибка при обработке аудио: {e}")
+    await message.reply(
+        "ℹ️ <b>Голосовой ввод отключен.</b>\n\n"
+        "Отправьте задачу текстом с клавиатуры через команду:\n"
+        "<code>/task сдать СРО завтра в 14:00</code>\n\n"
+        "или откройте вкладку <b>«🏝️ Остров»</b> в веб-дашборде бота!",
+        parse_mode="HTML"
+    )
 
 @island_router.message(Command("task", "remind", "todo"))
 async def handle_text_task(message: Message):

@@ -292,6 +292,31 @@ DASHBOARD_HTML = """
         }
 
         /* Dynamic Island MiniApp Styles */
+                .quick-time-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 10px;
+            margin-bottom: 8px;
+        }
+        .time-chip {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: #94a3b8;
+            border-radius: 14px;
+            padding: 5px 11px;
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .time-chip:active {
+            background: rgba(96, 165, 250, 0.25);
+            color: #60a5fa;
+            border-color: rgba(96, 165, 250, 0.5);
+            transform: scale(0.96);
+        }
         .island-card {
             background: rgba(255, 255, 255, 0.03);
             border: 1px solid rgba(255, 255, 255, 0.08);
@@ -912,236 +937,34 @@ DASHBOARD_HTML = """
         setInterval(loadStats, 3000);
 
         // ============================================
-        // DYNAMIC ISLAND TASK & VOICE RECORDING LOGIC
+        // DYNAMIC ISLAND TASK (KEYBOARD TEXT INPUT)
         // ============================================
-        let mediaRecorder = null;
-        let audioChunks = [];
-        let recordTimer = null;
-        let recordSeconds = 0;
-        let speechRecognizer = null;
-        let recognizedSpeechText = '';
-
-        async function handleVoiceButton() {
-            if ((mediaRecorder && mediaRecorder.state === 'recording') || speechRecognizer) {
-                stopVoiceRecording();
+        function appendQuickTime(timeText) {
+            const inp = document.getElementById('island-task-input');
+            if (!inp) return;
+            const current = (inp.value || '').trim();
+            if (current) {
+                inp.value = current + ' ' + timeText;
             } else {
-                startVoiceRecording();
+                inp.value = 'Напомнить ' + timeText;
             }
-        }
-
-        async function startVoiceRecording() {
-            const statusBox = document.getElementById('voice-status-box');
-            const btn = document.getElementById('btn-voice-rec');
-            const recText = document.getElementById('voice-rec-text');
-            const recIcon = document.getElementById('voice-rec-icon');
-
-            recognizedSpeechText = '';
-            statusBox.style.display = 'block';
-            statusBox.innerText = '🎙️ Говорите задачу (например: "Напомни завтра в 14:00 сдать курсовую")...';
-
-            const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-            let speechActive = false;
-
-            if (SpeechRec) {
-                try {
-                    speechRecognizer = new SpeechRec();
-                    speechRecognizer.lang = 'ru-RU';
-                    speechRecognizer.interimResults = true;
-                    speechRecognizer.continuous = true;
-
-                    speechRecognizer.onresult = (event) => {
-                        let fullText = '';
-                        for (let i = 0; i < event.results.length; ++i) {
-                            fullText += event.results[i][0].transcript;
-                        }
-                        if (fullText) {
-                            recognizedSpeechText = fullText.trim();
-                            statusBox.innerHTML = `🎙️ <b>Слушаю:</b> «${escapeHtml(recognizedSpeechText)}»`;
-                        }
-                    };
-
-                    speechRecognizer.onerror = (event) => {
-                        console.warn('SpeechRecognition error:', event.error);
-                    };
-
-                    speechRecognizer.start();
-                    speechActive = true;
-                } catch (e) {
-                    console.warn('SpeechRec failed to start:', e);
-                    speechRecognizer = null;
-                }
-            }
-
-            try {
-                if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    let mimeType = 'audio/webm';
-                    if (!MediaRecorder.isTypeSupported('audio/webm')) {
-                        if (MediaRecorder.isTypeSupported('audio/ogg')) mimeType = 'audio/ogg';
-                        else if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
-                        else mimeType = '';
-                    }
-
-                    mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-                    audioChunks = [];
-
-                    mediaRecorder.ondataavailable = (e) => {
-                        if (e.data && e.data.size > 0) audioChunks.push(e.data);
-                    };
-
-                    mediaRecorder.onstop = async () => {
-                        stream.getTracks().forEach(track => track.stop());
-                        clearInterval(recordTimer);
-
-                        // If mobile speech recognition already transcribed the text, send directly!
-                        if (recognizedSpeechText && recognizedSpeechText.length > 2) {
-                            await sendRecognizedText(recognizedSpeechText);
-                        } else {
-                            // Fallback to server audio recognition
-                            const mime = mediaRecorder.mimeType || 'audio/webm';
-                            const audioBlob = new Blob(audioChunks, { type: mime });
-                            await uploadVoiceBlob(audioBlob, mime);
-                        }
-                    };
-
-                    mediaRecorder.start();
-                }
-            } catch (err) {
-                console.warn('Mic stream error:', err);
-                if (!speechActive) {
-                    statusBox.innerText = '❌ Ошибка микрофона: ' + err.message;
-                    return;
-                }
-            }
-
-            recordSeconds = 0;
-            btn.classList.add('recording');
-            recIcon.innerText = '⏹️';
-            recText.innerText = 'Идет запись (0с)... Нажмите для отправки';
-
-            clearInterval(recordTimer);
-            recordTimer = setInterval(() => {
-                recordSeconds++;
-                recText.innerText = `Идет запись (${recordSeconds}с)... Нажмите для отправки`;
-            }, 1000);
-
+            inp.focus();
             if (window.Telegram?.WebApp?.HapticFeedback) {
-                window.Telegram.WebApp.HapticFeedback.impactOccurred('medium');
-            }
-        }
-
-        function stopVoiceRecording() {
-            const btn = document.getElementById('btn-voice-rec');
-            const recText = document.getElementById('voice-rec-text');
-            const recIcon = document.getElementById('voice-rec-icon');
-            const statusBox = document.getElementById('voice-status-box');
-
-            btn.classList.remove('recording');
-            recIcon.innerText = '⏳';
-            recText.innerText = 'Обработка и сохранение...';
-            statusBox.innerText = '⏳ Обрабатываю задачу...';
-            clearInterval(recordTimer);
-
-            if (speechRecognizer) {
-                try { speechRecognizer.stop(); } catch (e) { }
-                speechRecognizer = null;
-            }
-
-            if (mediaRecorder && mediaRecorder.state === 'recording') {
-                mediaRecorder.stop();
-            } else if (recognizedSpeechText && recognizedSpeechText.length > 2) {
-                sendRecognizedText(recognizedSpeechText);
-            }
-
-            if (window.Telegram?.WebApp?.HapticFeedback) {
-                window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
-            }
-        }
-
-        async function sendRecognizedText(text) {
-            const statusBox = document.getElementById('voice-status-box');
-            const recText = document.getElementById('voice-rec-text');
-            const recIcon = document.getElementById('voice-rec-icon');
-
-            try {
-                const res = await fetch('/api/island/add', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: text })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    statusBox.innerHTML = `✅ <b>Распознано:</b> «${escapeHtml(text)}»<br>🏝️ Задача добавлена в Dynamic Island!`;
-                    if (window.Telegram?.WebApp?.HapticFeedback) {
-                        window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-                    }
-                    await loadIslandTasks();
-                } else {
-                    statusBox.innerText = '⚠️ ' + (data.error || 'Ошибка добавления');
-                }
-            } catch (e) {
-                statusBox.innerText = '❌ Ошибка сети: ' + e.message;
-            } finally {
-                recIcon.innerText = '🎙️';
-                recText.innerText = 'Записать голосовое напоминание';
-                setTimeout(() => {
-                    if (statusBox.innerText.includes('Распознано')) {
-                        statusBox.style.display = 'none';
-                    }
-                }, 4000);
-            }
-        }
-
-        async function uploadVoiceBlob(blob, mimeType) {
-            const statusBox = document.getElementById('voice-status-box');
-            const recText = document.getElementById('voice-rec-text');
-            const recIcon = document.getElementById('voice-rec-icon');
-
-            try {
-                let ext = 'webm';
-                if (mimeType.includes('ogg')) ext = 'ogg';
-                else if (mimeType.includes('mp4')) ext = 'mp4';
-
-                const formData = new FormData();
-                formData.append('audio', blob, `voice.${ext}`);
-
-                const res = await fetch('/api/island/voice_upload', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await res.json();
-
-                if (data.success) {
-                    statusBox.innerHTML = `✅ <b>Распознано:</b> «${escapeHtml(data.transcribed)}»<br>🏝️ Отправлено в Dynamic Island!`;
-                    if (window.Telegram?.WebApp?.HapticFeedback) {
-                        window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-                    }
-                    await loadIslandTasks();
-                } else {
-                    statusBox.innerText = '⚠️ ' + (data.error || 'Ошибка распознавания');
-                }
-            } catch (e) {
-                statusBox.innerText = '❌ Ошибка сети: ' + e.message;
-            } finally {
-                recIcon.innerText = '🎙️';
-                recText.innerText = 'Записать голосовое напоминание';
-                setTimeout(() => {
-                    if (statusBox.innerText.includes('Распознано')) {
-                        statusBox.style.display = 'none';
-                    }
-                }, 5000);
+                window.Telegram.WebApp.HapticFeedback.selectionChanged();
             }
         }
 
         async function createTextTask() {
             const input = document.getElementById('island-task-input');
+            const statusBox = document.getElementById('island-status-box');
             const text = (input.value || '').trim();
-            if (!text) return;
+            if (!text) {
+                input.focus();
+                return;
+            }
 
-            input.value = '';
-            const statusBox = document.getElementById('voice-status-box');
             statusBox.style.display = 'block';
-            statusBox.innerText = '⏳ Добавление задачи...';
+            statusBox.innerText = '⏳ Добавляю задачу...';
 
             try {
                 const res = await fetch('/api/island/add', {
@@ -1151,14 +974,20 @@ DASHBOARD_HTML = """
                 });
                 const data = await res.json();
                 if (data.success) {
-                    statusBox.innerHTML = `✅ Задача «${escapeHtml(data.task.title)}» сохранена для Dynamic Island!`;
+                    input.value = '';
+                    const task = data.task;
+                    const datePart = task.target_date || 'Сегодня';
+                    const timePart = task.target_time ? ` в ${task.target_time}` : '';
+                    statusBox.innerHTML = `✅ <b>Задача сохранена:</b> «${escapeHtml(task.title)}»<br>📅 ${datePart}${timePart}<br>🏝️ Отправлено в Dynamic Island на ПК!`;
                     if (window.Telegram?.WebApp?.HapticFeedback) {
                         window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
                     }
                     await loadIslandTasks();
-                    setTimeout(() => { statusBox.style.display = 'none'; }, 4000);
+                    setTimeout(() => {
+                        statusBox.style.display = 'none';
+                    }, 4000);
                 } else {
-                    statusBox.innerText = '⚠️ ' + (data.error || 'Ошибка');
+                    statusBox.innerText = '⚠️ ' + (data.error || 'Ошибка добавления');
                 }
             } catch (e) {
                 statusBox.innerText = '❌ Ошибка сети: ' + e.message;
