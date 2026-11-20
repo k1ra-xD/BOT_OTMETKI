@@ -531,7 +531,7 @@ DASHBOARD_HTML = """
             <button id="tab-present" class="tab-btn active" onclick="switchTab('present')">📍 Сегодня (<span id="tab-present-num">0</span>)</button>
             <button id="tab-absent" class="tab-btn" onclick="switchTab('absent')">🚫 Прогулы (<span id="tab-absent-num">0</span>)</button>
             <button id="tab-analytics" class="tab-btn" onclick="switchTab('analytics')">📈 Аналитика</button>
-            <button id="tab-island" class="tab-btn" onclick="switchTab('island')">🏝️ Остров (<span id="tab-island-num">0</span>)</button>
+            <button id="tab-island" class="tab-btn" onclick="switchTab('island')">⚡ Задачи (<span id="tab-island-num">0</span>)</button>
         </div>
 
         <div id="filter-wrapper" style="display:block;">
@@ -621,7 +621,7 @@ DASHBOARD_HTML = """
             </div>
 
             <div class="island-section-header">
-                <span class="section-title">📌 Очередь задач</span>
+                <span class="section-title">📌 Список задач</span>
                 <button class="btn-island-refresh" onclick="loadIslandTasks()">🔄</button>
             </div>
 
@@ -956,7 +956,7 @@ DASHBOARD_HTML = """
                     const task = data.task;
                     const datePart = task.target_date || 'Сегодня';
                     const timePart = task.target_time ? ` в ${task.target_time}` : '';
-                    statusBox.innerHTML = `✅ <b>Задача сохранена:</b> «${escapeHtml(task.title)}»<br>📅 ${datePart}${timePart}<br>🏝️ Отправлено в Dynamic Island на ПК!`;
+                    statusBox.innerHTML = `✅ <b>Задача сохранена:</b> «${escapeHtml(task.title)}»<br>📅 ${datePart}${timePart}<br>⚡ Задача сохранена!`;
                     if (window.Telegram?.WebApp?.HapticFeedback) {
                         window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
                     }
@@ -1343,7 +1343,7 @@ def create_web_app(get_db_pool, current_session=None, bot=None):
 
             # Умный разбор естественного языка (если передан text)
             if raw_text and not title:
-                from voice_helper import parse_task_time_and_title
+                from task_helper import parse_task_time_and_title
                 title, t_date, t_time = parse_task_time_and_title(raw_text)
 
             if not title:
@@ -1355,51 +1355,210 @@ def create_web_app(get_db_pool, current_session=None, bot=None):
         except Exception as e:
             return web.json_response({'success': False, 'error': str(e)}, status=400)
 
-    async def handle_island_voice_upload(request):
+    async def handle_student_app(request):
+        headers = {
+            'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        }
+        return web.Response(text=STUDENT_APP_HTML, content_type='text/html', headers=headers)
+
+    async def handle_api_schedule(request):
         pool = get_db_pool()
         if not pool:
-            return web.json_response({'success': False, 'error': 'No DB'}, status=500)
+            return web.json_response({'error': 'No DB connection'}, status=500)
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM schedule ORDER BY day_of_week ASC, time_start ASC")
+        schedule_by_day = {}
+        for r in rows:
+            day = r['day_of_week']
+            schedule_by_day.setdefault(day, []).append({
+                'id': r['id'],
+                'time_start': r['time_start'],
+                'time_end': r['time_end'],
+                'subject': r['subject'],
+                'lesson_type': r['lesson_type'],
+                'teacher': r['teacher'],
+                'room': r['room'],
+                'online_link': r.get('online_link') if 'online_link' in r else ''
+            })
+        now = datetime.now(ASTANA_TZ)
+        return web.json_response({
+            'success': True,
+            'schedule': schedule_by_day,
+            'today_day': now.weekday(),
+            'current_time': now.strftime("%H:%M")
+        })
+
+    async def handle_api_uni_info(request):
+        pool = get_db_pool()
+        if not pool:
+            return web.json_response({'error': 'No DB connection'}, status=500)
+        from config import DEFAULT_UNI_LAT, DEFAULT_UNI_LON, DEFAULT_RADIUS
+        from db import get_setting
+        lat = await get_setting(pool, 'lat', DEFAULT_UNI_LAT)
+        lon = await get_setting(pool, 'lon', DEFAULT_UNI_LON)
+        radius = await get_setting(pool, 'radius', DEFAULT_RADIUS)
+        return web.json_response({
+            'lat': float(lat),
+            'lon': float(lon),
+            'radius': int(radius)
+        })
+
+    async def handle_api_checkin(request):
+        pool = get_db_pool()
+        if not pool:
+            return web.json_response({'success': False, 'error': 'No DB connection'}, status=500)
         try:
-            audio_bytes = None
-            filename = 'voice.webm'
-            if request.content_type.startswith('multipart/'):
-                reader = await request.multipart()
-                while True:
-                    part = await reader.next()
-                    if part is None:
+            data = await request.json()
+            telegram_id = int(data.get('telegram_id', 0))
+            lat = float(data.get('lat', 0.0))
+            lon = float(data.get('lon', 0.0))
+
+            if not telegram_id or not lat or not lon:
+                return web.json_response({'success': False, 'error': 'Некорректные координаты или ID'}, status=400)
+
+            from config import DEFAULT_UNI_LAT, DEFAULT_UNI_LON, DEFAULT_RADIUS
+            from db import get_setting
+            from handlers import calculate_distance, parse_time_to_minutes
+
+            uni_lat = await get_setting(pool, 'lat', DEFAULT_UNI_LAT)
+            uni_lon = await get_setting(pool, 'lon', DEFAULT_UNI_LON)
+            radius = await get_setting(pool, 'radius', DEFAULT_RADIUS)
+
+            dist = calculate_distance(uni_lat, uni_lon, lat, lon)
+            is_inside = dist <= radius
+
+            now = datetime.now(ASTANA_TZ)
+            now_naive = now.replace(tzinfo=None)
+
+            time_threshold = now_naive - timedelta(minutes=50)
+            async with pool.acquire() as conn:
+                existing = await conn.fetchrow("""
+                    SELECT id, checkin_time, subject, status FROM attendance 
+                    WHERE telegram_id = $1 AND checkin_time >= $2
+                """, telegram_id, time_threshold)
+                if existing and telegram_id != ADMIN_ID:
+                    return web.json_response({
+                        'success': False,
+                        'already_checked': True,
+                        'error': 'Вы уже отметились на этой паре!',
+                        'checkin_time': existing['checkin_time'].strftime("%H:%M") if existing['checkin_time'] else ""
+                    })
+
+                day_code = now.weekday()
+                lessons = await conn.fetch("SELECT * FROM schedule WHERE day_of_week = $1 ORDER BY time_start ASC", day_code)
+
+                current_lesson = None
+                now_minutes = now.hour * 60 + now.minute
+                status_text = "Вовремя"
+
+                for l in lessons:
+                    start_min = parse_time_to_minutes(l['time_start'])
+                    end_min = parse_time_to_minutes(l['time_end'])
+                    if start_min - 15 <= now_minutes <= end_min:
+                        current_lesson = l
+                        if now_minutes > start_min + 15:
+                            status_text = "⚠️ Опоздание"
+                        else:
+                            status_text = "✅ Вовремя"
                         break
-                    if part.name == 'audio':
-                        audio_bytes = await part.read()
-                        if part.filename:
-                            filename = part.filename
-                        break
-            elif request.content_type.startswith('audio/'):
-                audio_bytes = await request.read()
-            else:
-                post_data = await request.post()
-                audio_field = post_data.get('audio')
-                if hasattr(audio_field, 'file'):
-                    audio_bytes = audio_field.file.read()
-                    filename = getattr(audio_field, 'filename', 'voice.webm')
 
-            if not audio_bytes:
-                return web.json_response({'success': False, 'error': 'Аудиозапись не передана'}, status=400)
+                subject_name = current_lesson['subject'] if current_lesson else "Вне пар"
+                if not is_inside:
+                    status_text = "❌ Вне зоны"
 
-            from voice_helper import transcribe_audio_bytes, parse_task_time_and_title
-            transcribed = await transcribe_audio_bytes(audio_bytes, filename=filename)
-            if not transcribed:
-                return web.json_response({
-                    'success': False, 
-                    'error': 'Не удалось распознать речь. Убедитесь, что в переменных окружения на Render указан GROQ_API_KEY.'
-                }, status=400)
+                await conn.execute("""
+                    INSERT INTO attendance (telegram_id, subject, checkin_time, status, distance)
+                    VALUES ($1, $2, $3, $4, $5)
+                """, telegram_id, subject_name, now_naive, status_text, int(dist))
 
-            title, t_date, t_time = parse_task_time_and_title(transcribed)
-            from db import add_island_task
-            task = await add_island_task(pool, ADMIN_ID, title, t_date, t_time)
-            return web.json_response({'success': True, 'transcribed': transcribed, 'task': task})
+            if bot:
+                try:
+                    if is_inside:
+                        msg = (
+                            f"🎉 <b>Успешная отметка через приложение!</b>\n"
+                            f"📖 <b>Предмет:</b> {subject_name}\n"
+                            f"📍 <b>Расстояние:</b> ~{int(dist)}м (в зоне ВУЗа)\n"
+                            f"📊 <b>Статус:</b> {status_text}"
+                        )
+                    else:
+                        msg = (
+                            f"❌ <b>Отметка сохранена: Вне зоны ВУЗа!</b>\n"
+                            f"📍 <b>Расстояние:</b> ~{int(dist)}м (допустимо: {radius}м)\n"
+                            f"Для зачета подойдите ближе к учебному корпусу."
+                        )
+                    await bot.send_message(telegram_id, msg, parse_mode="HTML")
+                except Exception:
+                    pass
+
+            return web.json_response({
+                'success': True,
+                'inside': is_inside,
+                'distance': int(dist),
+                'radius': int(radius),
+                'status': status_text,
+                'subject': subject_name
+            })
         except Exception as e:
             return web.json_response({'success': False, 'error': str(e)}, status=500)
 
+    async def handle_api_student_status(request):
+        pool = get_db_pool()
+        if not pool:
+            return web.json_response({'error': 'No DB'}, status=500)
+        tg_id = request.query.get('telegram_id')
+        if not tg_id or not tg_id.isdigit():
+            return web.json_response({'error': 'Invalid ID'}, status=400)
+        telegram_id = int(tg_id)
+        now = datetime.now(ASTANA_TZ)
+        today_start = datetime(now.year, now.month, now.day)
+        async with pool.acquire() as conn:
+            student = await conn.fetchrow("SELECT full_name FROM students WHERE telegram_id = $1", telegram_id)
+            last_checkin = await conn.fetchrow("""
+                SELECT subject, checkin_time, status, distance
+                FROM attendance 
+                WHERE telegram_id = $1 AND checkin_time >= $2
+                ORDER BY checkin_time DESC LIMIT 1
+            """, telegram_id, today_start)
+        return web.json_response({
+            'registered': bool(student),
+            'name': student['full_name'] if student else '',
+            'checked_today': bool(last_checkin),
+            'last_checkin': {
+                'subject': last_checkin['subject'],
+                'time': last_checkin['checkin_time'].strftime("%H:%M"),
+                'status': last_checkin['status'],
+                'distance': last_checkin['distance']
+            } if last_checkin else None
+        })
+
+    async def handle_api_subjects(request):
+        pool = get_db_pool()
+        if not pool:
+            return web.json_response({'subjects': []})
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT DISTINCT subject FROM schedule WHERE subject IS NOT NULL AND subject != '' ORDER BY subject ASC")
+        return web.json_response({'subjects': [r['subject'] for r in rows]})
+
+    async def handle_api_settings(request):
+        pool = get_db_pool()
+        if not pool:
+            return web.json_response({'error': 'No DB'}, status=500)
+        try:
+            data = await request.json()
+            user_id = int(data.get('user_id', 0))
+            if user_id != ADMIN_ID:
+                return web.json_response({'error': 'Forbidden'}, status=403)
+            from db import set_setting
+            if 'radius' in data:
+                await set_setting(pool, 'radius', int(data['radius']))
+            if 'lat' in data and 'lon' in data:
+                await set_setting(pool, 'lat', float(data['lat']))
+                await set_setting(pool, 'lon', float(data['lon']))
+            return web.json_response({'success': True})
+        except Exception as e:
+            return web.json_response({'error': str(e)}, status=400)
 
     async def handle_island_ws(request):
         user_id = request.query.get('user_id', '')
@@ -1424,62 +1583,22 @@ def create_web_app(get_db_pool, current_session=None, bot=None):
             print("[WS] Dynamic Island disconnected")
         return ws
 
-    async def handle_island_tts(request):
-        try:
-            if request.method == 'POST':
-                data = await request.json()
-                t_text = str(data.get('text', '')).strip()
-                t_voice = str(data.get('voice', 'ru-RU-DmitryNeural')).strip()
-            else:
-                t_text = str(request.query.get('text', '')).strip()
-                t_voice = str(request.query.get('voice', 'ru-RU-DmitryNeural')).strip()
-
-            if not t_text:
-                return web.json_response({'error': 'No text provided'}, status=400)
-
-            # 1. Try Microsoft Edge Neural TTS
-            try:
-                import edge_tts
-                comm = edge_tts.Communicate(t_text, t_voice)
-                audio_buffer = bytearray()
-                async for chunk in comm.stream():
-                    if chunk['type'] == 'audio':
-                        audio_buffer.extend(chunk['data'])
-                if audio_buffer:
-                    return web.Response(body=bytes(audio_buffer), content_type='audio/mpeg')
-            except Exception as e:
-                print('Edge TTS server fallback:', e)
-
-            # 2. Fallback to Google Natural Voice
-            try:
-                import urllib.parse
-                import aiohttp
-                encoded = urllib.parse.quote(t_text)
-                g_url = f'https://translate.google.com/translate_tts?ie=UTF-8&q={encoded}&tl=ru&client=tw-ob'
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(g_url, headers={'User-Agent': 'Mozilla/5.0'}) as resp:
-                        if resp.status == 200:
-                            g_bytes = await resp.read()
-                            return web.Response(body=g_bytes, content_type='audio/mpeg')
-            except Exception as e:
-                print('Google TTS fallback:', e)
-
-            return web.json_response({'error': 'TTS failed'}, status=500)
-        except Exception as e:
-            return web.json_response({'error': str(e)}, status=500)
-
-    app.router.add_get('/', handle_root)
+    app.router.add_get('/', handle_student_app)
+    app.router.add_get('/app', handle_student_app)
     app.router.add_get('/ping', handle_root)
     app.router.add_get('/dashboard', handle_dashboard)
     app.router.add_get('/api/stats', handle_api_stats)
     app.router.add_get('/api/analytics', handle_api_analytics)
+    app.router.add_get('/api/schedule', handle_api_schedule)
+    app.router.add_get('/api/uni_info', handle_api_uni_info)
+    app.router.add_get('/api/student_status', handle_api_student_status)
+    app.router.add_post('/api/checkin', handle_api_checkin)
+    app.router.add_get('/api/subjects', handle_api_subjects)
+    app.router.add_post('/api/settings', handle_api_settings)
     app.router.add_get('/api/island/tasks', handle_island_tasks)
     app.router.add_post('/api/island/mark_spoken', handle_island_mark_spoken)
     app.router.add_post('/api/island/complete', handle_island_complete)
     app.router.add_post('/api/island/delete', handle_island_delete)
     app.router.add_post('/api/island/add', handle_island_add)
-    app.router.add_post('/api/island/voice_upload', handle_island_voice_upload)
-    app.router.add_post('/api/island/tts', handle_island_tts)
-    app.router.add_get('/api/island/tts', handle_island_tts)
     app.router.add_get('/api/island/ws', handle_island_ws)
     return app

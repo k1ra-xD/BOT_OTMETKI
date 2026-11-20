@@ -76,11 +76,14 @@ router.message.middleware(BannedMiddleware())
 student_main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [
-            KeyboardButton(text="📅 Расписание"), 
+            KeyboardButton(text="📱 Открыть приложение", web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/app")),
             KeyboardButton(text="📍 Я здесь", request_location=True)
         ],
         [
-            KeyboardButton(text="📤 Сдать СРО"),
+            KeyboardButton(text="📅 Расписание"), 
+            KeyboardButton(text="📤 Сдать СРО")
+        ],
+        [
             KeyboardButton(text="📁 Лекции на Google Диске")
         ]
     ],
@@ -88,6 +91,7 @@ student_main_kb = ReplyKeyboardMarkup(
 )
 
 schedule_inline_kb = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="📲 Интерактивное расписание", web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/app#schedule"))],
     [
         InlineKeyboardButton(text="Сегодня", callback_data="sched_today"),
         InlineKeyboardButton(text="Завтра", callback_data="sched_tomorrow")
@@ -104,13 +108,16 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 chat_id=message.chat.id,
                 menu_button=MenuButtonWebApp(
                     text="📊 Дашборд",
-                    web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard?v=3")
+                    web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard?v=4")
                 )
             )
         else:
             await bot.set_chat_menu_button(
                 chat_id=message.chat.id,
-                menu_button=MenuButtonDefault()
+                menu_button=MenuButtonWebApp(
+                    text="📱 Приложение",
+                    web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/app")
+                )
             )
     except Exception as e:
         logging.error(f"Ошибка меню кнопки: {e}")
@@ -134,7 +141,8 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
         )
 
         admin_inline_panel = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📊 WebApp Дашборд", web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard?v=3"))],
+            [InlineKeyboardButton(text="📊 WebApp Дашборд", web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard?v=4"))],
+            [InlineKeyboardButton(text="📱 Приложение студента", web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/app"))],
             [InlineKeyboardButton(text="🔄 Авто-обновить с сайта (esil.edu.kz)", callback_data="admin_auto_update_schedule")],
             [InlineKeyboardButton(text="✏️ Ввести расписание вручную", callback_data="admin_edit_schedule")]
         ])
@@ -178,7 +186,7 @@ async def process_name(message: Message, state: FSMContext):
 # Просмотр расписания
 @router.message(F.text == "📅 Расписание")
 async def show_schedule_menu(message: Message):
-    await message.answer("Выберите период для просмотра расписания:", reply_markup=schedule_inline_kb)
+    await message.answer("Выберите период для просмотра расписания или откройте интерактивный виджет:", reply_markup=schedule_inline_kb)
 
 async def format_day_schedule(conn, day_code: int) -> str:
     lessons = await conn.fetch("SELECT * FROM schedule WHERE day_of_week = $1 ORDER BY time_start ASC", day_code)
@@ -530,15 +538,13 @@ async def show_lectures_link(message: Message):
     )
 
 DEFAULT_UPDATE_TEXT = (
-    "🚀 <b>Большое обновление бота: Сдача СРО и лабораторных!</b>\n\n"
-    "Теперь вы можете сдавать выполненные работы прямо через Telegram, а бот автоматически загрузит их на Google Диск по нужным папкам.\n\n"
-    "📌 <b>Как это работает:</b>\n"
-    "1️⃣ Нажмите кнопку <b>«📤 Сдать СРО»</b> в главном меню.\n"
-    "2️⃣ <b>Выберите предмет</b> из предложенного списка.\n"
-    "3️⃣ <b>Выберите номер СРО</b> (например, <i>СРО 1</i>, <i>СРО 2</i>) или нажмите <i>«Ввести другое название»</i>, чтобы создать папку с темой (например, <i>Лабораторная 3</i> или <i>Курсовая</i>).\n"
-    "4️⃣ <b>Отправьте файл или альбом файлов</b> (Word, PDF, фото, архив) — бот сохранит их на Диске.\n\n"
-    "🔄 <b>Дозагрузка файлов:</b>\n"
-    "Если вы забыли прикрепить файл или хотите дослать дополнение, просто выберите предмет ещё раз — бот покажет ваши созданные папки, и вы сможете отправить работу прямо в них без дублирования!\n\n"
+    "🚀 <b>Большое обновление бота: Сдача СРО и интерактивное приложение!</b>\n\n"
+    "📱 В бот добавлено полноценное веб-приложение: расписание, онлайн-отметка и сдача СРО!\n"
+    "Нажмите синюю кнопку <b>«📱 Приложение»</b> в нижнем меню Telegram.\n\n"
+    "📌 <b>Основные возможности:</b>\n"
+    "1️⃣ <b>Интерактивное расписание</b> по дням недели с подсветкой текущей пары.\n"
+    "2️⃣ <b>Отметка присутствия («Я здесь»)</b> в один клик через встроенный радар.\n"
+    "3️⃣ <b>Сдача СРО</b> напрямую в ваши персональные папки на Google Диске.\n\n"
     "<i>Успешной учёбы! 🎓</i>"
 )
 
@@ -633,7 +639,7 @@ async def run_broadcast(bot: Bot, admin_chat_id: int, text_to_send: str):
         parse_mode="HTML"
     )
 
-# Загрузка расписания через Excel-файл напрямую от админа (обход блокировки 403)
+# Загрузка расписания через Excel-файл напрямую от админа
 @router.message(F.from_user.id == ADMIN_ID, F.document, F.document.file_name.lower().contains("распис"))
 async def admin_upload_schedule_excel(message: Message, bot: Bot):
     status_msg = await message.answer("⏳ Скачиваю и обрабатываю файл расписания...")
@@ -642,11 +648,9 @@ async def admin_upload_schedule_excel(message: Message, bot: Bot):
         tg_file = await bot.get_file(message.document.file_id)
         downloaded_file = await bot.download_file(tg_file.file_path)
         
-        # Сохраняем как локальный файл расписания
-        with open(LOCAL_FILE_NAME, "wb") as f: # обратите внимание: "wb"
+        with open(LOCAL_FILE_NAME, "wb") as f:
             f.write(downloaded_file.getvalue())
 
-        # Парсим через parser.py
         parsed_lessons = await asyncio.to_thread(parse_excel_schedule)
 
         async with get_db_pool().acquire() as conn:

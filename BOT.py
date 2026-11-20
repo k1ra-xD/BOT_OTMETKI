@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import asyncpg
 from aiohttp import web
 from aiogram import Bot, Dispatcher
-from aiogram.types import ErrorEvent
+from aiogram.types import ErrorEvent, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from sro_handlers import sro_router
 
 from config import TOKEN, DATABASE_URL, ASTANA_TZ, ADMIN_ID
@@ -88,15 +88,19 @@ async def schedule_notifications_loop(bot: Bot):
                                 f"🚪 <b>Аудитория:</b> {first_lesson['room']}"
                                 f"{link_text}\n\n"
                                 f"📍 <b>Подтвердите присутствие в университете:</b>\n"
-                                f"Нажмите кнопку <b>«📍 Я здесь»</b> внизу, чтобы отметиться!"
+                                f"Нажмите кнопку <b>«📍 Отметиться»</b> ниже или отправьте геопозицию кнопкой в меню!"
                             )
+                            first_kb = InlineKeyboardMarkup(inline_keyboard=[
+                                [InlineKeyboardButton(text="📍 Отметиться в приложении", web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/app#checkin"))]
+                            ])
+
                             students = await conn.fetch("SELECT telegram_id FROM students")
                             recipients = {s['telegram_id'] for s in students}
                             if ADMIN_ID:
                                 recipients.add(ADMIN_ID)
                             for user_id in recipients:
                                 try:
-                                    await bot.send_message(user_id, text_first, parse_mode="HTML")
+                                    await bot.send_message(user_id, text_first, parse_mode="HTML", reply_markup=first_kb)
                                 except Exception:
                                     pass
 
@@ -128,9 +132,13 @@ async def schedule_notifications_loop(bot: Bot):
                                     f"🚪 <b>Аудитория:</b> {lesson['room']}"
                                     f"{link_text}"
                                 )
+                                remind_kb = InlineKeyboardMarkup(inline_keyboard=[
+                                    [InlineKeyboardButton(text="📲 Открыть расписание", web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/app#schedule"))]
+                                ])
+
                                 for user_id in recipients:
                                     try:
-                                        await bot.send_message(user_id, text, parse_mode="HTML")
+                                        await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=remind_kb)
                                     except Exception:
                                         pass
         except Exception as e:
@@ -151,7 +159,7 @@ async def main():
 
     dp.include_router(sro_router)
     dp.include_router(router)       # Сначала проверяем админские команды и расписание
-    dp.include_router(island_router) # Голосовые заметки и задачи для Dynamic Island
+    dp.include_router(island_router) # Задачи и напоминания
     dp.include_router(drive_router) # Затем всё остальное уходит на Google Диск
 
     asyncio.create_task(schedule_notifications_loop(bot))

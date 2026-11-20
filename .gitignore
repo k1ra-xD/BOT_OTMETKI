@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+credentials.json
+token.json
+.vscode/
+.idea/
+*.ps1
