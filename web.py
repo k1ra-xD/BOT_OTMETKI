@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
+import aiohttp
 from aiohttp import web
 from config import ASTANA_TZ, ADMIN_ID
+from student_html import STUDENT_APP_HTML
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
