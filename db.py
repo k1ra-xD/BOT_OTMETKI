@@ -43,6 +43,11 @@ async def init_db(db_pool: asyncpg.Pool):
                 is_spoken BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS active_reminders (
+                telegram_id BIGINT PRIMARY KEY,
+                message_id BIGINT,
+                delete_at BIGINT
+            );
         """)
         
         await conn.execute("INSERT INTO settings (key, value) VALUES ('lat', $1) ON CONFLICT (key) DO NOTHING", str(DEFAULT_UNI_LAT))

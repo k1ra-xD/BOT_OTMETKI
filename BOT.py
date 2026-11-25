@@ -54,10 +54,47 @@ async def global_error_handler(event: ErrorEvent, bot: Bot):
         print(f"Не удалось отправить лог ошибки админу: {e}")
 
 
+def calculate_delete_at(now: datetime, time_end_str: str) -> int:
+    """Вычисляет unix-время удаления напоминания (по времени окончания пары)."""
+    try:
+        parts = str(time_end_str).strip().split(':')
+        h, m = int(parts[0]), int(parts[1])
+        end_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if end_dt < now:
+            end_dt += timedelta(days=1)
+        return int(end_dt.timestamp())
+    except Exception:
+        return int((now + timedelta(hours=2)).timestamp())
+
+
+async def send_or_replace_notification(bot: Bot, conn, user_id: int, text: str, delete_at: int):
+    """Отправляет уведомление, удаляя предыдущее напоминание у пользователя, чтобы сообщения не накапливались."""
+    # 1. Удаляем предыдущее напоминание у этого пользователя
+    row = await conn.fetchrow("SELECT message_id FROM active_reminders WHERE telegram_id = $1", user_id)
+    if row and row['message_id']:
+        try:
+            await bot.delete_message(chat_id=user_id, message_id=row['message_id'])
+        except Exception:
+            pass
+
+    # 2. Отправляем новое сообщение и сохраняем его ID
+    try:
+        sent_msg = await bot.send_message(user_id, text, parse_mode="HTML")
+        await conn.execute("""
+            INSERT INTO active_reminders (telegram_id, message_id, delete_at)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (telegram_id) DO UPDATE 
+            SET message_id = EXCLUDED.message_id, delete_at = EXCLUDED.delete_at
+        """, user_id, sent_msg.message_id, delete_at)
+    except Exception:
+        pass
+
+
 async def schedule_notifications_loop(bot: Bot):
     while True:
         try:
             now = datetime.now(ASTANA_TZ)
+            now_ts = int(now.timestamp())
             current_day = now.weekday()
             current_time = now.strftime("%H:%M")
             target_time = (now + timedelta(minutes=10)).strftime("%H:%M")
@@ -66,6 +103,16 @@ async def schedule_notifications_loop(bot: Bot):
             pool = get_db_pool()
             if pool:
                 async with pool.acquire() as conn:
+                    # 0. Удаляем истекшие напоминания (когда пара уже закончилась)
+                    expired = await conn.fetch("SELECT telegram_id, message_id FROM active_reminders WHERE delete_at <= $1", now_ts)
+                    for exp in expired:
+                        try:
+                            await bot.delete_message(chat_id=exp['telegram_id'], message_id=exp['message_id'])
+                        except Exception:
+                            pass
+                    if expired:
+                        await conn.execute("DELETE FROM active_reminders WHERE delete_at <= $1", now_ts)
+
                     # 1. Рассылка на самой первой паре дня
                     first_lesson = await conn.fetchrow(
                         "SELECT * FROM schedule WHERE day_of_week = $1 ORDER BY time_start ASC LIMIT 1",
@@ -90,15 +137,13 @@ async def schedule_notifications_loop(bot: Bot):
                                 f"📍 <b>Подтвердите присутствие в университете:</b>\n"
                                 f"Нажмите кнопку <b>«📍 Я здесь»</b> внизу, чтобы отметиться!"
                             )
+                            delete_at_first = calculate_delete_at(now, first_lesson.get('time_end', ''))
                             students = await conn.fetch("SELECT telegram_id FROM students")
                             recipients = {s['telegram_id'] for s in students}
                             if ADMIN_ID:
                                 recipients.add(ADMIN_ID)
                             for user_id in recipients:
-                                try:
-                                    await bot.send_message(user_id, text_first, parse_mode="HTML")
-                                except Exception:
-                                    pass
+                                await send_or_replace_notification(bot, conn, user_id, text_first, delete_at_first)
 
                     # 2. Обычные напоминания за 10 минут до пар
                     lessons = await conn.fetch(
@@ -128,11 +173,9 @@ async def schedule_notifications_loop(bot: Bot):
                                     f"🚪 <b>Аудитория:</b> {lesson['room']}"
                                     f"{link_text}"
                                 )
+                                delete_at_lesson = calculate_delete_at(now, lesson.get('time_end', ''))
                                 for user_id in recipients:
-                                    try:
-                                        await bot.send_message(user_id, text, parse_mode="HTML")
-                                    except Exception:
-                                        pass
+                                    await send_or_replace_notification(bot, conn, user_id, text, delete_at_lesson)
         except Exception as e:
             print(f"Ошибка в рассылке: {e}")
         await asyncio.sleep(30)
