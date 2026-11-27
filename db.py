@@ -27,8 +27,8 @@ def get_db_connection_params():
 
 def _prepare_sql(query: str, has_args: bool = False) -> str:
     """Адаптирует PostgreSQL-запросы к синтаксису MySQL."""
-    # 1. Заменяем $1, $2, $3 на плейсхолдер
-    sql = re.sub(r'\$\d+', '___PARAM___', query)
+    # 1. Заменяем $1, $2, $3 и уже готовые %s на плейсхолдер
+    sql = re.sub(r'\$\d+|%s', '___PARAM___', query)
     if has_args:
         # Экранируем символы процента для PyMySQL
         sql = sql.replace('%', '%%')
