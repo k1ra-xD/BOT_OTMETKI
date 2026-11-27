@@ -13,6 +13,7 @@ from handlers import router, set_db_pool, get_db_pool
 from web import create_web_app
 from drive_handlers import drive_router
 from island_handlers import island_router
+from tunnel import start_cloudflared_tunnel
 
 notified_lessons = set()
 
@@ -205,6 +206,8 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     print(f"🌐 WebApp запущен на порту {port}")
+
+    asyncio.create_task(start_cloudflared_tunnel(port, bot))
 
     await dp.start_polling(bot)
 

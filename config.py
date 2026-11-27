@@ -26,6 +26,15 @@ DEFAULT_RADIUS = 150
 
 ASTANA_TZ = timezone(timedelta(hours=5))
 
+_webapp_url = os.environ.get("WEBAPP_URL", "https://bot-otmetki.onrender.com")
+
+def get_webapp_url() -> str:
+    return _webapp_url
+
+def set_webapp_url(url: str):
+    global _webapp_url
+    _webapp_url = url.rstrip("/")
+
 DAYS_MAP = {
     0: "Понедельник",
     1: "Вторник",

@@ -8,4 +8,6 @@ token.json
 .vscode/
 .idea/
 *.ps1
+cloudflared
+cloudflared.exe
 

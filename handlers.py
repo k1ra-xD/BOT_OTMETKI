@@ -14,7 +14,10 @@ from aiogram.types import (
     MenuButtonDefault, MenuButtonWebApp
 )
 
-from config import ADMIN_ID, DEFAULT_RADIUS, DEFAULT_UNI_LAT, DEFAULT_UNI_LON, DAYS_MAP, ASTANA_TZ, TARGET_GROUP, LOCAL_FILE_NAME
+from config import (
+    ADMIN_ID, DEFAULT_RADIUS, DEFAULT_UNI_LAT, DEFAULT_UNI_LON,
+    DAYS_MAP, ASTANA_TZ, TARGET_GROUP, LOCAL_FILE_NAME, get_webapp_url
+)
 from db import get_setting, set_setting
 from parser import download_schedule_file, parse_excel_schedule
 
@@ -104,7 +107,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
                 chat_id=message.chat.id,
                 menu_button=MenuButtonWebApp(
                     text="📊 Дашборд",
-                    web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard?v=3")
+                    web_app=WebAppInfo(url=f"{get_webapp_url()}/dashboard?v=3")
                 )
             )
         else:
@@ -134,7 +137,7 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
         )
 
         admin_inline_panel = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📊 WebApp Дашборд", web_app=WebAppInfo(url="https://bot-otmetki.onrender.com/dashboard?v=3"))],
+            [InlineKeyboardButton(text="📊 WebApp Дашборд", web_app=WebAppInfo(url=f"{get_webapp_url()}/dashboard?v=3"))],
             [InlineKeyboardButton(text="🔄 Авто-обновить с сайта (esil.edu.kz)", callback_data="admin_auto_update_schedule")],
             [InlineKeyboardButton(text="✏️ Ввести расписание вручную", callback_data="admin_edit_schedule")]
         ])
