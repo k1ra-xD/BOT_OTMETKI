@@ -164,18 +164,6 @@ async def init_db(db_pool):
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS island_tasks (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                user_id BIGINT,
-                title TEXT,
-                target_date VARCHAR(50),
-                target_time VARCHAR(50),
-                is_completed BOOLEAN DEFAULT FALSE,
-                is_spoken BOOLEAN DEFAULT FALSE,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """)
-        await conn.execute("""
             CREATE TABLE IF NOT EXISTS active_reminders (
                 telegram_id BIGINT PRIMARY KEY,
                 message_id BIGINT,
@@ -215,73 +203,3 @@ async def set_setting(pool, key: str, value):
             VALUES (%s, %s)
             ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)
         """, key, str(value))
-
-
-# ==========================================
-# Dynamic Island Task Helpers
-# ==========================================
-
-async def add_island_task(pool, user_id: int, title: str, target_date: str = "", target_time: str = ""):
-    """Добавить задачу для Dynamic Island"""
-    if not pool:
-        return None
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO island_tasks (user_id, title, target_date, target_time, is_completed, is_spoken)
-            VALUES (%s, %s, %s, %s, FALSE, FALSE)
-        """, user_id, title, target_date, target_time)
-        task_id = conn.lastrowid
-        row = await conn.fetchrow("SELECT id, title, target_date, target_time, is_completed, is_spoken FROM island_tasks WHERE id = %s", task_id)
-        return dict(row) if row else None
-
-
-async def get_active_island_tasks(pool, user_id: int = None):
-    """Получить незавершенные задачи"""
-    if not pool:
-        return []
-    async with pool.acquire() as conn:
-        if user_id:
-            rows = await conn.fetch("""
-                SELECT id, user_id, title, target_date, target_time, is_completed, is_spoken, created_at
-                FROM island_tasks
-                WHERE user_id = %s AND is_completed = FALSE
-                ORDER BY created_at ASC
-            """, user_id)
-        else:
-            rows = await conn.fetch("""
-                SELECT id, user_id, title, target_date, target_time, is_completed, is_spoken, created_at
-                FROM island_tasks
-                WHERE is_completed = FALSE
-                ORDER BY created_at ASC
-            """)
-        return [dict(r) for r in rows]
-
-
-async def mark_island_task_spoken(pool, task_id: int):
-    """Отметить задачу как проговоренную вслух"""
-    if not pool:
-        return False
-    async with pool.acquire() as conn:
-        await conn.execute("UPDATE island_tasks SET is_spoken = TRUE WHERE id = %s", task_id)
-        return True
-
-
-async def mark_island_task_completed(pool, task_id: int):
-    """Отметить задачу как выполненную"""
-    if not pool:
-        return None
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT id, user_id, title FROM island_tasks WHERE id = %s", task_id)
-        if row:
-            await conn.execute("UPDATE island_tasks SET is_completed = TRUE WHERE id = %s", task_id)
-            return dict(row)
-        return None
-
-
-async def delete_island_task(pool, task_id: int):
-    """Удалить задачу"""
-    if not pool:
-        return False
-    async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM island_tasks WHERE id = %s", task_id)
-        return True

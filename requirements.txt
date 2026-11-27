@@ -8,4 +8,3 @@ google-auth
 openpyxl
 beautifulsoup4
 requests
-edge-tts

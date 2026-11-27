@@ -12,7 +12,6 @@ from db import init_db, create_db_pool
 from handlers import router, set_db_pool, get_db_pool
 from web import create_web_app
 from drive_handlers import drive_router
-from island_handlers import island_router
 from tunnel import start_cloudflared_tunnel
 
 notified_lessons = set()
@@ -194,7 +193,6 @@ async def main():
 
     dp.include_router(sro_router)
     dp.include_router(router)       # Сначала проверяем админские команды и расписание
-    dp.include_router(island_router) # Голосовые заметки и задачи для Dynamic Island
     dp.include_router(drive_router) # Затем всё остальное уходит на Google Диск
 
     asyncio.create_task(schedule_notifications_loop(bot))
