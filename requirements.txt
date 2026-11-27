@@ -1,5 +1,7 @@
 aiogram
-asyncpg
+aiomysql
+PyMySQL
+cryptography
 aiohttp
 google-api-python-client
 google-auth

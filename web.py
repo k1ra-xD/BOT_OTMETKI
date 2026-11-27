@@ -1107,17 +1107,22 @@ def create_web_app(get_db_pool, current_session=None, bot=None):
             all_students = await conn.fetch("SELECT telegram_id, full_name FROM students ORDER BY full_name ASC")
             
             rows = await conn.fetch("""
-                SELECT DISTINCT ON (a.telegram_id)
+                SELECT 
                     a.telegram_id,
-                    COALESCE(s.full_name, 'ID: ' || a.telegram_id::text) AS name,
+                    COALESCE(s.full_name, CONCAT('ID: ', a.telegram_id)) AS name,
                     a.distance,
                     a.subject,
                     a.checkin_time,
                     a.status
                 FROM attendance a
                 LEFT JOIN students s ON a.telegram_id = s.telegram_id
-                WHERE a.checkin_time >= $1 AND a.checkin_time < $2
-                ORDER BY a.telegram_id, a.checkin_time DESC
+                INNER JOIN (
+                    SELECT telegram_id, MAX(checkin_time) AS max_time
+                    FROM attendance
+                    WHERE checkin_time >= $1 AND checkin_time < $2
+                    GROUP BY telegram_id
+                ) latest ON a.telegram_id = latest.telegram_id AND a.checkin_time = latest.max_time
+                ORDER BY a.checkin_time DESC
             """, today_start, today_end)
 
         checked_in_ids = set()
@@ -1167,7 +1172,7 @@ def create_web_app(get_db_pool, current_session=None, bot=None):
             # 1. Динамика по дням за последние 30 дней
             daily_rows = await conn.fetch("""
                 SELECT 
-                    TO_CHAR(checkin_time, 'DD.MM') AS day_label,
+                    DATE_FORMAT(checkin_time, '%d.%m') AS day_label,
                     DATE(checkin_time) AS dt,
                     COUNT(DISTINCT telegram_id) AS unique_students,
                     COUNT(*) AS total_checkins

@@ -2,14 +2,13 @@ import os
 import asyncio
 import traceback
 from datetime import datetime, timedelta
-import asyncpg
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.types import ErrorEvent
 from sro_handlers import sro_router
 
 from config import TOKEN, DATABASE_URL, ASTANA_TZ, ADMIN_ID
-from db import init_db
+from db import init_db, create_db_pool
 from handlers import router, set_db_pool, get_db_pool
 from web import create_web_app
 from drive_handlers import drive_router
@@ -82,9 +81,9 @@ async def send_or_replace_notification(bot: Bot, conn, user_id: int, text: str, 
         sent_msg = await bot.send_message(user_id, text, parse_mode="HTML")
         await conn.execute("""
             INSERT INTO active_reminders (telegram_id, message_id, delete_at)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (telegram_id) DO UPDATE 
-            SET message_id = EXCLUDED.message_id, delete_at = EXCLUDED.delete_at
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE 
+            message_id = VALUES(message_id), delete_at = VALUES(delete_at)
         """, user_id, sent_msg.message_id, delete_at)
     except Exception:
         pass
@@ -182,7 +181,7 @@ async def schedule_notifications_loop(bot: Bot):
 
 async def main():
     print("🚀 Запуск бота...")
-    db_pool = await asyncpg.create_pool(DATABASE_URL, statement_cache_size=0)
+    db_pool = await create_db_pool()
     set_db_pool(db_pool)
     await init_db(db_pool)
 

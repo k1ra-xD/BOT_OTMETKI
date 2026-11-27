@@ -169,7 +169,7 @@ async def process_name(message: Message, state: FSMContext):
     async with get_db_pool().acquire() as conn:
         await conn.execute("""
             INSERT INTO students (telegram_id, full_name) VALUES ($1, $2)
-            ON CONFLICT (telegram_id) DO UPDATE SET full_name = EXCLUDED.full_name
+            ON DUPLICATE KEY UPDATE full_name = VALUES(full_name)
         """, message.from_user.id, full_name)
 
     await state.clear()
@@ -483,7 +483,7 @@ async def admin_process_ban(message: Message, state: FSMContext):
     try: target_id = int(message.text.strip())
     except ValueError: return await message.answer("❌ Введите корректный ID.")
     async with get_db_pool().acquire() as conn:
-        await conn.execute("INSERT INTO banned_users (telegram_id) VALUES ($1) ON CONFLICT DO NOTHING", target_id)
+        await conn.execute("INSERT IGNORE INTO banned_users (telegram_id) VALUES ($1)", target_id)
         await conn.execute("DELETE FROM students WHERE telegram_id = $1", target_id)
     await state.clear()
     await message.answer(f"✅ Пользователь <code>{target_id}</code> заблокирован.", parse_mode="HTML")
