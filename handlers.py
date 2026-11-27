@@ -232,7 +232,7 @@ async def update_schedule_workflow(status_msg: Message):
         
         step4_text = (
             f"✅ <b>[4/5]</b> Извлечение завершено! Найдено пар: <b>{len(parsed_lessons)}</b>.\n"
-            f"⏳ <b>[5/5]</b> Сохранение расписания в Supabase..."
+            f"⏳ <b>[5/5]</b> Сохранение расписания в базу данных..."
         )
         await status_msg.edit_text(step4_text, parse_mode="HTML")
     except Exception as e:
@@ -248,7 +248,7 @@ async def update_schedule_workflow(status_msg: Message):
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                 """, *item)
 
-        summary = f"🎉 <b>Расписание успешно обновлено в Supabase!</b>\n\n"
+        summary = f"🎉 <b>Расписание успешно обновлено в базе данных!</b>\n\n"
         summary += f"👥 <b>Группа:</b> <code>{TARGET_GROUP}</code>\n"
         summary += f"📊 <b>Всего предметов:</b> {len(parsed_lessons)}\n\n"
 
@@ -637,7 +637,7 @@ async def run_broadcast(bot: Bot, admin_chat_id: int, text_to_send: str):
     )
 
 # Загрузка расписания через Excel-файл напрямую от админа (обход блокировки 403)
-@router.message(F.from_user.id == ADMIN_ID, F.document, F.document.file_name.lower().contains("распис"))
+@router.message(F.from_user.id == ADMIN_ID, F.document, F.document.file_name.lower().endswith((".xlsx", ".xls")))
 async def admin_upload_schedule_excel(message: Message, bot: Bot):
     status_msg = await message.answer("⏳ Скачиваю и обрабатываю файл расписания...")
     

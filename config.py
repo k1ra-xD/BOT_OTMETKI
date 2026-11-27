@@ -15,7 +15,7 @@ MYSQL_DB = os.environ.get("MYSQL_DB", "s1962_schedule")
 ADMIN_ID = 1231388093
 ADMIN_NAME = "Кирович Георгий"
 
-SCHEDULE_PAGE_URL = "https://esil.edu.kz/students_schedule/"
+SCHEDULE_PAGE_URL = "https://esil.edu.kz/students/schedule"
 LOCAL_FILE_NAME = "target_schedule.xlsx"
 TARGET_GROUP = "Б-ИТЗД 26/23 Р" 
 TARGET_SHEET = "рус Прик 1,3 1,2"

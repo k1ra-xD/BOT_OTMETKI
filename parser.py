@@ -66,33 +66,30 @@ def download_schedule_file():
     session = requests.Session()
     
     try:
-        print(ент := f"Стучимся на страницу: {SCHEDULE_PAGE_URL}")
+        print(f"Стучимся на страницу: {SCHEDULE_PAGE_URL}")
         res = session.get(SCHEDULE_PAGE_URL, headers=headers, timeout=20)
         
         if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            
-            # Проходим по всем ссылкам на странице в поисках файла 2 курса
-            for link in soup.find_all('a', href=True):
-                href = link['href'].strip()
-                link_text = link.get_text().strip().lower()
-                decoded_href = urllib.parse.unquote(href).lower()
-                
-                # Ищем то, что ведет на скачивание файла и содержит упоминание 2 курса
-                if "/api/media/file/" in href or ".xlsx" in decoded_href:
-                    if any(k in link_text or k in decoded_href for k in ["2 курс", "2-го курса", "2к", "2_к"]):
-                        target_url = href
-                        print(f"🎯 Найдена актуальная ссылка: {target_url}")
-                        break
-            
-            # Если по точному ключевому слову не нашлось, берем первую попавшуюся ссылку на .xlsx файл
+            # 1. Ищем прямые ссылки на .xlsx в HTML и JSON-скриптах Next.js
+            found_urls = re.findall(r'(?:https://esil\.edu\.kz)?/api/media/file/[^"\'\\<>]+\.xlsx', res.text)
+            for raw_u in found_urls:
+                decoded_u = urllib.parse.unquote(raw_u).lower()
+                if any(k in decoded_u for k in ["1к3г", "1к2г", "2к-4г", "2 курс", "2-го курса"]):
+                    target_url = raw_u
+                    print(f"🎯 Найдена актуальная ссылка: {target_url}")
+                    break
+
+            # 2. Запасной поиск по тегам <a>
             if not target_url:
+                soup = BeautifulSoup(res.text, 'html.parser')
                 for link in soup.find_all('a', href=True):
                     href = link['href'].strip()
-                    if "/api/media/file/" in href or ".xlsx" in href.lower():
-                        target_url = href
-                        print(f"⚠️ Взята первая доступная ссылка: {target_url}")
-                        break
+                    link_text = link.get_text().strip().lower()
+                    decoded_href = urllib.parse.unquote(href).lower()
+                    if "/api/media/file/" in href or ".xlsx" in decoded_href:
+                        if any(k in link_text or k in decoded_href for k in ["1к3г", "1к2г", "2 курс", "2-го курса", "2к", "2_к"]):
+                            target_url = href
+                            break
         else:
             print(f"⚠️ Сайт вернул код ответа: {res.status_code}")
 
@@ -100,14 +97,19 @@ def download_schedule_file():
         print(f"❌ Ошибка при парсинге страницы: {e}")
 
     if not target_url:
-        raise Exception("Не удалось автоматически найти ссылку на расписание 2 курса на сайте esil.edu.kz. Проверьте структуру страницы.")
+        raise Exception("Не удалось автоматически найти ссылку на расписание на сайте esil.edu.kz.")
 
     if not target_url.startswith("http"):
         target_url = "https://esil.edu.kz" + target_url
 
     print(f"📥 Скачивание файла расписания: {target_url}")
     
-    f_res = session.get(target_url, headers=headers, timeout=30)
+    f_res = session.get(target_url, headers={**headers, "Referer": SCHEDULE_PAGE_URL}, timeout=30)
+    if f_res.status_code == 403:
+        raise Exception(
+            "Сайт esil.edu.kz заблокировал автоматическое скачивание (анти-бот защита 403). "
+            "Нажмите «Скачать файл» на сайте в браузере и просто отправьте скачанный .xlsx файл сюда в чат!"
+        )
     f_res.raise_for_status()
 
     with open(LOCAL_FILE_NAME, "wb") as f:
